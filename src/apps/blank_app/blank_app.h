@@ -1,6 +1,7 @@
 /**
  * @file blank_app.h
- * @brief Enhanced Blank/Screensaver App with bouncing logo and trails
+ * @brief Screensaver using LVGL's built-in animation system
+ * Uses LVGL native animations for smooth, hardware-optimized performance
  */
 
 #ifndef BLANK_APP_H
@@ -13,161 +14,193 @@ public:
     BlankApp() : DokiApp("blank", "Screensaver") {}
     
     void onCreate() override {
-        log("Creating Enhanced Blank App...");
+        log("Creating LVGL Native Screensaver...");
         
         // Black background
         lv_obj_set_style_bg_color(getScreen(), lv_color_hex(0x000000), 0);
         
-        // Create trail effect (multiple fading circles)
-        for (int i = 0; i < 5; i++) {
-            _trail[i] = lv_obj_create(getScreen());
-            lv_obj_set_size(_trail[i], 20 - i * 3, 20 - i * 3);
-            lv_obj_set_style_radius(_trail[i], LV_RADIUS_CIRCLE, 0);
-            lv_obj_set_style_bg_color(_trail[i], lv_color_hex(0x667eea), 0);
-            lv_obj_set_style_bg_opa(_trail[i], 50 - i * 10, 0);
-            lv_obj_set_style_border_width(_trail[i], 0, 0);
-            lv_obj_add_flag(_trail[i], LV_OBJ_FLAG_HIDDEN);
+        // Create multiple animated circles with different speeds
+        for (int i = 0; i < 3; i++) {
+            _circles[i] = lv_obj_create(getScreen());
+            
+            // Size varies (80, 60, 40)
+            int size = 80 - (i * 20);
+            lv_obj_set_size(_circles[i], size, size);
+            
+            // Make them circles
+            lv_obj_set_style_radius(_circles[i], LV_RADIUS_CIRCLE, 0);
+            lv_obj_set_style_border_width(_circles[i], 0, 0);
+            
+            // Different colors
+            uint32_t colors[] = {0x667eea, 0x764ba2, 0x00d4ff};
+            lv_obj_set_style_bg_color(_circles[i], lv_color_hex(colors[i]), 0);
+            lv_obj_set_style_bg_opa(_circles[i], LV_OPA_30 + (i * 20), 0);
+            
+            // Add shadow/glow effect
+            lv_obj_set_style_shadow_width(_circles[i], 20, 0);
+            lv_obj_set_style_shadow_color(_circles[i], lv_color_hex(colors[i]), 0);
+            lv_obj_set_style_shadow_opa(_circles[i], LV_OPA_50, 0);
+            
+            // Start at center
+            lv_obj_center(_circles[i]);
         }
         
-        // Main bouncing dot
-        _dot = lv_obj_create(getScreen());
-        lv_obj_set_size(_dot, 20, 20);
-        lv_obj_set_style_radius(_dot, LV_RADIUS_CIRCLE, 0);
-        lv_obj_set_style_bg_color(_dot, lv_color_hex(0x667eea), 0);
-        lv_obj_set_style_border_width(_dot, 2, 0);
-        lv_obj_set_style_border_color(_dot, lv_color_hex(0x764ba2), 0);
-        lv_obj_set_style_shadow_width(_dot, 10, 0);
-        lv_obj_set_style_shadow_color(_dot, lv_color_hex(0x667eea), 0);
-        lv_obj_set_style_shadow_opa(_dot, LV_OPA_50, 0);
+        // Create animated arcs (spinning rings)
+        for (int i = 0; i < 2; i++) {
+            _arcs[i] = lv_arc_create(getScreen());
+            
+            // Size
+            int size = 150 - (i * 40);
+            lv_obj_set_size(_arcs[i], size, size);
+            lv_obj_center(_arcs[i]);
+            
+            // Arc settings
+            lv_arc_set_rotation(_arcs[i], 0);
+            lv_arc_set_bg_angles(_arcs[i], 0, 360);
+            lv_arc_set_angles(_arcs[i], 0, 120);
+            
+            // Style
+            lv_obj_set_style_arc_width(_arcs[i], 4, LV_PART_MAIN);
+            lv_obj_set_style_arc_width(_arcs[i], 4, LV_PART_INDICATOR);
+            
+            uint32_t colors[] = {0x667eea, 0x764ba2};
+            lv_obj_set_style_arc_color(_arcs[i], lv_color_hex(colors[i]), LV_PART_INDICATOR);
+            lv_obj_set_style_arc_opa(_arcs[i], LV_OPA_40, LV_PART_INDICATOR);
+            
+            // Hide background arc
+            lv_obj_set_style_arc_opa(_arcs[i], LV_OPA_0, LV_PART_MAIN);
+            
+            // Remove knob
+            lv_obj_set_style_bg_opa(_arcs[i], LV_OPA_0, LV_PART_KNOB);
+        }
         
-        // "Doki OS" subtle label
+        // "DOKI OS" label
         _logoLabel = lv_label_create(getScreen());
         lv_label_set_text(_logoLabel, "DOKI OS");
         lv_obj_align(_logoLabel, LV_ALIGN_BOTTOM_RIGHT, -15, -15);
-        lv_obj_set_style_text_font(_logoLabel, &lv_font_montserrat_12, 0);
-        lv_obj_set_style_text_color(_logoLabel, lv_color_hex(0x333333), 0);
-        lv_obj_set_style_opa(_logoLabel, LV_OPA_20, 0);
+        lv_obj_set_style_text_font(_logoLabel, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(_logoLabel, lv_color_hex(0x667eea), 0);
+        lv_obj_set_style_opa(_logoLabel, LV_OPA_30, 0);
         
-        // Initialize position and velocity
-        _dotX = 120;
-        _dotY = 160;
-        _dotVelX = 3.2f;
-        _dotVelY = 2.7f;
-        
-        // Trail history
-        for (int i = 0; i < 5; i++) {
-            _trailX[i] = _dotX;
-            _trailY[i] = _dotY;
-        }
-        
-        _lastUpdate = 0;
-        _colorPhase = 0;
-        
-        lv_obj_set_pos(_dot, _dotX, _dotY);
-        
-        // Fade in animation
-        lv_obj_set_style_opa(getScreen(), LV_OPA_0, 0);
-        lv_obj_fade_in(getScreen(), 500, 0);
+        // Start animations
+        startAnimations();
     }
     
     void onStart() override {
-        log("Blank App started - Screensaver mode");
+        log("Screensaver started!");
     }
     
     void onUpdate() override {
-        uint32_t now = millis();
-        
-        // Update at 30 FPS (instead of 60) for better dual-display performance
-        if (now - _lastUpdate >= 33) {
-            animateDot();
-            updateTrail();
-            animateColor();
-            _lastUpdate = now;
-        }
+        // LVGL handles all animations automatically!
+        // No manual updates needed
     }
     
     void onPause() override {
-        log("Blank App paused");
+        log("Screensaver paused");
+        // Stop animations
+        for (int i = 0; i < 3; i++) {
+            lv_anim_del(_circles[i], NULL);
+        }
+        for (int i = 0; i < 2; i++) {
+            lv_anim_del(_arcs[i], NULL);
+        }
     }
     
     void onDestroy() override {
-        log("Blank App destroyed");
+        log("Screensaver destroyed");
+        // Animations auto-deleted with objects
     }
 
 private:
-    lv_obj_t* _dot;
-    lv_obj_t* _trail[5];
+    lv_obj_t* _circles[3];
+    lv_obj_t* _arcs[2];
     lv_obj_t* _logoLabel;
     
-    float _dotX;
-    float _dotY;
-    float _dotVelX;
-    float _dotVelY;
-    
-    float _trailX[5];
-    float _trailY[5];
-    
-    uint32_t _lastUpdate;
-    float _colorPhase;
-    
-    void animateDot() {
-        // Update position
-        _dotX += _dotVelX;
-        _dotY += _dotVelY;
-        
-        // Bounce off edges with slight randomization
-        if (_dotX <= 0 || _dotX >= 220) {
-            _dotVelX = -_dotVelX;
-            _dotX = constrain(_dotX, 0, 220);
-            // Add slight randomization to velocity
-            _dotVelX *= (0.95f + (random(0, 100) / 1000.0f));
-        }
-        
-        if (_dotY <= 0 || _dotY >= 300) {
-            _dotVelY = -_dotVelY;
-            _dotY = constrain(_dotY, 0, 300);
-            _dotVelY *= (0.95f + (random(0, 100) / 1000.0f));
-        }
-        
-        // Update dot position
-        lv_obj_set_pos(_dot, (int16_t)_dotX, (int16_t)_dotY);
+    // Animation callback for position
+    static void anim_x_cb(void* obj, int32_t v) {
+        lv_obj_set_x((lv_obj_t*)obj, v);
     }
     
-    void updateTrail() {
-        // Shift trail positions
-        for (int i = 4; i > 0; i--) {
-            _trailX[i] = _trailX[i-1];
-            _trailY[i] = _trailY[i-1];
-        }
-        _trailX[0] = _dotX;
-        _trailY[0] = _dotY;
-        
-        // Update trail object positions
-        for (int i = 0; i < 5; i++) {
-            lv_obj_clear_flag(_trail[i], LV_OBJ_FLAG_HIDDEN);
-            lv_obj_set_pos(_trail[i], (int16_t)_trailX[i], (int16_t)_trailY[i]);
-        }
+    static void anim_y_cb(void* obj, int32_t v) {
+        lv_obj_set_y((lv_obj_t*)obj, v);
     }
     
-    void animateColor() {
-        // Cycle through colors slowly
-        _colorPhase += 0.01f;
-        if (_colorPhase > 6.28f) _colorPhase = 0;
-        
-        // HSV to RGB-like color cycling
-        uint8_t r = 102 + (uint8_t)(50 * sin(_colorPhase));
-        uint8_t g = 126 + (uint8_t)(50 * sin(_colorPhase + 2.09f));
-        uint8_t b = 234 + (uint8_t)(20 * sin(_colorPhase + 4.19f));
-        
-        uint32_t color = (r << 16) | (g << 8) | b;
-        lv_obj_set_style_bg_color(_dot, lv_color_hex(color), 0);
-        lv_obj_set_style_border_color(_dot, lv_color_hex(color), 0);
-        lv_obj_set_style_shadow_color(_dot, lv_color_hex(color), 0);
-        
-        // Update trail colors with fade
-        for (int i = 0; i < 5; i++) {
-            lv_obj_set_style_bg_color(_trail[i], lv_color_hex(color), 0);
+    // Animation callback for opacity
+    static void anim_opa_cb(void* obj, int32_t v) {
+        lv_obj_set_style_bg_opa((lv_obj_t*)obj, v, 0);
+    }
+    
+    // Animation callback for arc rotation
+    static void anim_arc_cb(void* obj, int32_t v) {
+        lv_arc_set_rotation((lv_obj_t*)obj, v);
+    }
+    
+    void startAnimations() {
+        // Animate circles - smooth floating movement
+        for (int i = 0; i < 3; i++) {
+            // X position animation (left-right)
+            lv_anim_t anim_x;
+            lv_anim_init(&anim_x);
+            lv_anim_set_var(&anim_x, _circles[i]);
+            lv_anim_set_values(&anim_x, 20, 220 - (80 - i * 20));
+            lv_anim_set_time(&anim_x, 4000 + (i * 1000));  // Different speeds
+            lv_anim_set_exec_cb(&anim_x, anim_x_cb);
+            lv_anim_set_path_cb(&anim_x, lv_anim_path_ease_in_out);
+            lv_anim_set_repeat_count(&anim_x, LV_ANIM_REPEAT_INFINITE);
+            lv_anim_set_playback_time(&anim_x, 4000 + (i * 1000));
+            lv_anim_start(&anim_x);
+            
+            // Y position animation (up-down)
+            lv_anim_t anim_y;
+            lv_anim_init(&anim_y);
+            lv_anim_set_var(&anim_y, _circles[i]);
+            lv_anim_set_values(&anim_y, 20, 300 - (80 - i * 20));
+            lv_anim_set_time(&anim_y, 5000 + (i * 1200));  // Different speeds
+            lv_anim_set_exec_cb(&anim_y, anim_y_cb);
+            lv_anim_set_path_cb(&anim_y, lv_anim_path_ease_in_out);
+            lv_anim_set_repeat_count(&anim_y, LV_ANIM_REPEAT_INFINITE);
+            lv_anim_set_playback_time(&anim_y, 5000 + (i * 1200));
+            lv_anim_set_delay(&anim_y, i * 500);  // Stagger start
+            lv_anim_start(&anim_y);
+            
+            // Opacity pulse
+            lv_anim_t anim_opa;
+            lv_anim_init(&anim_opa);
+            lv_anim_set_var(&anim_opa, _circles[i]);
+            lv_anim_set_values(&anim_opa, LV_OPA_20, LV_OPA_60);
+            lv_anim_set_time(&anim_opa, 3000);
+            lv_anim_set_exec_cb(&anim_opa, anim_opa_cb);
+            lv_anim_set_path_cb(&anim_opa, lv_anim_path_ease_in_out);
+            lv_anim_set_repeat_count(&anim_opa, LV_ANIM_REPEAT_INFINITE);
+            lv_anim_set_playback_time(&anim_opa, 3000);
+            lv_anim_start(&anim_opa);
         }
+        
+        // Animate arcs - spinning
+        for (int i = 0; i < 2; i++) {
+            lv_anim_t anim_arc;
+            lv_anim_init(&anim_arc);
+            lv_anim_set_var(&anim_arc, _arcs[i]);
+            lv_anim_set_values(&anim_arc, 0, 360);
+            lv_anim_set_time(&anim_arc, 3000 + (i * 1000));  // Different speeds
+            lv_anim_set_exec_cb(&anim_arc, anim_arc_cb);
+            lv_anim_set_repeat_count(&anim_arc, LV_ANIM_REPEAT_INFINITE);
+            lv_anim_start(&anim_arc);
+        }
+        
+        // Animate logo pulse
+        lv_anim_t anim_logo;
+        lv_anim_init(&anim_logo);
+        lv_anim_set_var(&anim_logo, _logoLabel);
+        lv_anim_set_values(&anim_logo, LV_OPA_10, LV_OPA_50);
+        lv_anim_set_time(&anim_logo, 2000);
+        lv_anim_set_exec_cb(&anim_logo, [](void* obj, int32_t v) {
+            lv_obj_set_style_opa((lv_obj_t*)obj, v, 0);
+        });
+        lv_anim_set_path_cb(&anim_logo, lv_anim_path_ease_in_out);
+        lv_anim_set_repeat_count(&anim_logo, LV_ANIM_REPEAT_INFINITE);
+        lv_anim_set_playback_time(&anim_logo, 2000);
+        lv_anim_start(&anim_logo);
     }
 };
 

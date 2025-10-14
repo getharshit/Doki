@@ -121,17 +121,26 @@ public:
     void onUpdate() override {
         uint32_t now = millis();
         
-        // NTP sync every 60 seconds
+        // NTP sync every 60 seconds - NON-BLOCKING
         if (now - _lastNtpSync >= 60000) {
-            _ntpClient->update();
+            // Quick check without waiting
+            if (_ntpClient->update()) {
+                Serial.println("[Clock] NTP synced");
+            }
             _lastNtpSync = now;
         }
         
-        // Update display every 200ms (reduced from 100ms for better performance)
-        if (now - _lastUpdate >= 200) {
+        // Update display every 1000ms (every second is enough for a clock!)
+        if (now - _lastUpdate >= 1000) {
             updateDisplay();
-            animateBackground();
             _lastUpdate = now;
+        }
+        
+        // Animate background separately at lower rate
+        static uint32_t lastAnim = 0;
+        if (now - lastAnim >= 50) {  // 20 FPS for background
+            animateBackground();
+            lastAnim = now;
         }
     }
     
@@ -235,13 +244,18 @@ private:
     }
     
     void animateBackground() {
-        // Slow pulsing animation for background circles
-        _animPhase += 0.02f;
+        // Slow pulsing animation - only update every 100ms
+        static uint32_t lastBgUpdate = 0;
+        uint32_t now = millis();
+        if (now - lastBgUpdate < 100) return;
+        lastBgUpdate = now;
+        
+        _animPhase += 0.1f;
         if (_animPhase > 6.28f) _animPhase = 0;
         
         // Calculate opacity pulse (10% to 20%)
         uint8_t opa1 = 25 + (uint8_t)(15 * sin(_animPhase));
-        uint8_t opa2 = 25 + (uint8_t)(15 * sin(_animPhase + 1.57f)); // 90° offset
+        uint8_t opa2 = 25 + (uint8_t)(15 * sin(_animPhase + 1.57f));
         
         lv_obj_set_style_bg_opa(_bgCircle1, opa1, 0);
         lv_obj_set_style_bg_opa(_bgCircle2, opa2, 0);

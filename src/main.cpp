@@ -71,9 +71,13 @@ struct Display {
     uint32_t appStartTime;
 };
 
+// ========================================
+// Global Variables
+// ========================================
 Display displays[2];
 SPIClass spi(HSPI);
 AsyncWebServer server(80);
+SemaphoreHandle_t lvgl_mutex = NULL;  // Mutex for LVGL thread safety
 
 // ========================================
 // ST7789 Functions
@@ -211,7 +215,7 @@ bool loadAppOnDisplay(uint8_t displayId, const String& appId) {
     
     Display* d = &displays[displayId];
     
-    // Unload current app
+    // Unload current app (outside mutex)
     if (d->app) {
         Serial.printf("[Display %d] Unloading '%s'\n", displayId, d->appId.c_str());
         d->app->onPause();
@@ -221,27 +225,40 @@ bool loadAppOnDisplay(uint8_t displayId, const String& appId) {
         d->appId = "";
     }
     
-    // Set LVGL context
-    lv_disp_set_default(d->disp);
-    lv_obj_clean(lv_scr_act());
-    
-    // Create and load new app
     Serial.printf("[Display %d] Loading '%s'\n", displayId, appId.c_str());
-    d->app = createApp(appId);
     
-    if (!d->app) {
+    // Create new app (outside mutex)
+    Doki::DokiApp* newApp = createApp(appId);
+    if (!newApp) {
         Serial.printf("[Display %d] Failed to create app '%s'\n", displayId, appId.c_str());
         return false;
     }
     
+    // LOCK only for LVGL operations (very brief)
+    if (lvgl_mutex) xSemaphoreTake(lvgl_mutex, portMAX_DELAY);
+    
+    // Set LVGL context
+    lv_disp_set_default(d->disp);
+    
+    // Clear screen
+    lv_obj_clean(lv_scr_act());
+    lv_obj_set_style_bg_color(lv_scr_act(), lv_color_hex(0x000000), 0);
+    
+    // Create app UI (this is fast with native LVGL animations)
+    newApp->onCreate();
+    
+    // UNLOCK immediately
+    if (lvgl_mutex) xSemaphoreGive(lvgl_mutex);
+    
+    // Update app state
+    d->app = newApp;
     d->appId = appId;
     d->appStartTime = millis();
     
-    d->app->onCreate();
-    d->app->_setState(Doki::AppState::CREATED);
-    d->app->onStart();
-    d->app->_setState(Doki::AppState::STARTED);
-    d->app->_markStarted();
+    newApp->_setState(Doki::AppState::CREATED);
+    newApp->onStart();
+    newApp->_setState(Doki::AppState::STARTED);
+    newApp->_markStarted();
     
     Serial.printf("[Display %d] ✓ '%s' loaded\n", displayId, appId.c_str());
     return true;
@@ -580,6 +597,14 @@ void setup() {
     Serial.println("║    🎨 Doki OS - Dual Display + HTTP Control      ║");
     Serial.println("╚═══════════════════════════════════════════════════╝\n");
     
+    // Create LVGL mutex for thread safety
+    lvgl_mutex = xSemaphoreCreateMutex();
+    if (!lvgl_mutex) {
+        Serial.println("FATAL: Failed to create LVGL mutex!");
+        while(1) delay(1000);
+    }
+    Serial.println("✓ LVGL mutex created");
+    
     // Initialize SPI
     spi.begin(TFT_SCLK, -1, TFT_MOSI);
     spi.setFrequency(40000000);
@@ -626,16 +651,12 @@ void setup() {
 }
 
 void loop() {
-    static uint32_t lastLvglUpdate = 0;
+    static uint32_t lastPerfReport = 0;
+    static uint32_t updateCount = 0;
+    
     uint32_t now = millis();
     
-    // Update LVGL at ~30ms intervals (33 FPS)
-    if (now - lastLvglUpdate >= 30) {
-        lv_timer_handler();
-        lastLvglUpdate = now;
-    }
-    
-    // Update each app independently
+    // Always update apps and render - mutex only protects app loading
     for (int i = 0; i < 2; i++) {
         if (displays[i].app) {
             lv_disp_set_default(displays[i].disp);
@@ -643,6 +664,20 @@ void loop() {
         }
     }
     
-    // Much smaller delay - let apps control their own timing
-    delay(1);
+    // Let LVGL render
+    lv_timer_handler();
+    
+    updateCount++;
+    
+    // Print performance report every 5 seconds
+    if (now - lastPerfReport >= 5000) {
+        Serial.printf("[PERF] Loop FPS: ~%d, Display 0: %s, Display 1: %s\n", 
+                     updateCount / 5,
+                     displays[0].appId.c_str(), 
+                     displays[1].appId.c_str());
+        lastPerfReport = now;
+        updateCount = 0;
+    }
+    
+    yield();
 }
