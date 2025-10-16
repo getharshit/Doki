@@ -4,6 +4,7 @@
  */
 
 #include "doki/display_manager.h"
+#include "doki/qr_generator.h"
 #include <SPI.h>
 
 namespace Doki {
@@ -275,6 +276,134 @@ bool DisplayManager::_initDisplay(uint8_t displayId, const DisplayConfig& config
     // (This will be implemented when integrating with LVGL)
     // For now, just mark as successful
     
+    return true;
+}
+
+// ========================================
+// Setup Screen Methods
+// ========================================
+
+bool DisplayManager::showSetupScreen(uint8_t displayId,
+                                      const String& ssid,
+                                      const String& password,
+                                      const String& url) {
+    if (displayId >= _displayCount || !_displays[displayId].initialized) {
+        Serial.printf("[DisplayManager] Error: Display %d not available\n", displayId);
+        return false;
+    }
+
+    Serial.printf("[DisplayManager] Showing setup screen on Display %d\n", displayId);
+
+    // Set LVGL to use this display
+    lv_disp_set_default(_displays[displayId].lvgl_display);
+
+    // Get the screen object
+    lv_obj_t* screen = lv_disp_get_scr_act(_displays[displayId].lvgl_display);
+
+    // Use QR Generator to create complete setup screen
+    String setupURL = url.isEmpty() ? ("http://192.168.4.1/setup") : url;
+    QRGenerator::createSetupScreen(screen, ssid, password, setupURL);
+
+    Serial.printf("[DisplayManager] ✓ Setup screen displayed on Display %d\n", displayId);
+    return true;
+}
+
+bool DisplayManager::showStatusMessage(uint8_t displayId,
+                                        const String& message,
+                                        bool isError) {
+    if (displayId >= _displayCount || !_displays[displayId].initialized) {
+        return false;
+    }
+
+    Serial.printf("[DisplayManager] Display %d: %s\n", displayId, message.c_str());
+
+    // Set LVGL to use this display
+    lv_disp_set_default(_displays[displayId].lvgl_display);
+
+    // Get the screen object
+    lv_obj_t* screen = lv_disp_get_scr_act(_displays[displayId].lvgl_display);
+
+    // Clear screen
+    lv_obj_clean(screen);
+    lv_obj_set_style_bg_color(screen, lv_color_hex(0x000000), 0);
+
+    // Create message label
+    lv_obj_t* msgLabel = lv_label_create(screen);
+    lv_label_set_text(msgLabel, message.c_str());
+    lv_label_set_long_mode(msgLabel, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(msgLabel, 200);
+    lv_obj_center(msgLabel);
+    lv_obj_set_style_text_align(msgLabel, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(msgLabel, &lv_font_montserrat_16, 0);
+
+    // Color based on message type
+    if (isError) {
+        lv_obj_set_style_text_color(msgLabel, lv_color_hex(0xFF4444), 0);
+    } else {
+        lv_obj_set_style_text_color(msgLabel, lv_color_hex(0x10b981), 0);
+    }
+
+    return true;
+}
+
+bool DisplayManager::clearSetupScreen(uint8_t displayId) {
+    if (displayId >= _displayCount || !_displays[displayId].initialized) {
+        return false;
+    }
+
+    Serial.printf("[DisplayManager] Clearing setup screen on Display %d\n", displayId);
+
+    // Set LVGL to use this display
+    lv_disp_set_default(_displays[displayId].lvgl_display);
+
+    // Get the screen object
+    lv_obj_t* screen = lv_disp_get_scr_act(_displays[displayId].lvgl_display);
+
+    // Clear screen
+    lv_obj_clean(screen);
+    lv_obj_set_style_bg_color(screen, lv_color_hex(0x000000), 0);
+
+    return true;
+}
+
+bool DisplayManager::showBootSplash(uint8_t displayId) {
+    if (displayId >= _displayCount || !_displays[displayId].initialized) {
+        return false;
+    }
+
+    Serial.printf("[DisplayManager] Showing boot splash on Display %d\n", displayId);
+
+    // Set LVGL to use this display
+    lv_disp_set_default(_displays[displayId].lvgl_display);
+
+    // Get the screen object
+    lv_obj_t* screen = lv_disp_get_scr_act(_displays[displayId].lvgl_display);
+
+    // Clear screen
+    lv_obj_clean(screen);
+    lv_obj_set_style_bg_color(screen, lv_color_hex(0x000000), 0);
+
+    // Doki OS Title
+    lv_obj_t* title = lv_label_create(screen);
+    lv_label_set_text(title, "Doki OS");
+    lv_obj_align(title, LV_ALIGN_CENTER, 0, -40);
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_32, 0);
+    lv_obj_set_style_text_color(title, lv_color_hex(0x667eea), 0);
+
+    // Version
+    lv_obj_t* version = lv_label_create(screen);
+    lv_label_set_text(version, "v0.2.0");
+    lv_obj_align(version, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_text_font(version, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(version, lv_color_hex(0x888888), 0);
+
+    // Loading message
+    lv_obj_t* loading = lv_label_create(screen);
+    lv_label_set_text(loading, "Initializing...");
+    lv_obj_align(loading, LV_ALIGN_CENTER, 0, 40);
+    lv_obj_set_style_text_font(loading, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_color(loading, lv_color_hex(0x10b981), 0);
+
     return true;
 }
 

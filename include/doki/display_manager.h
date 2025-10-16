@@ -135,6 +135,68 @@ public:
      */
     static void printStatus();
 
+    // ========================================
+    // Setup Screen Methods
+    // ========================================
+
+    /**
+     * @brief Show setup screen with QR code
+     *
+     * @param displayId Display ID
+     * @param ssid WiFi AP SSID
+     * @param password WiFi AP password
+     * @param url Setup URL (optional)
+     * @return true if setup screen displayed successfully
+     *
+     * Displays a setup screen with QR code and instructions
+     * for WiFi configuration.
+     *
+     * Example:
+     *   DisplayManager::showSetupScreen(0, "DokiOS-Setup", "doki1234");
+     */
+    static bool showSetupScreen(uint8_t displayId,
+                                 const String& ssid,
+                                 const String& password,
+                                 const String& url = "");
+
+    /**
+     * @brief Show status message on display
+     *
+     * @param displayId Display ID
+     * @param message Status message to display
+     * @param isError true for error message (red), false for normal (green)
+     * @return true if message displayed successfully
+     *
+     * Displays a centered status message on the screen.
+     *
+     * Example:
+     *   DisplayManager::showStatusMessage(0, "Connecting to WiFi...", false);
+     *   DisplayManager::showStatusMessage(1, "Connection failed!", true);
+     */
+    static bool showStatusMessage(uint8_t displayId,
+                                   const String& message,
+                                   bool isError = false);
+
+    /**
+     * @brief Clear setup screen
+     *
+     * @param displayId Display ID
+     * @return true if screen cleared successfully
+     *
+     * Clears the setup screen and prepares for normal app display.
+     */
+    static bool clearSetupScreen(uint8_t displayId);
+
+    /**
+     * @brief Show boot splash screen
+     *
+     * @param displayId Display ID
+     * @return true if splash displayed successfully
+     *
+     * Shows Doki OS logo and version on boot.
+     */
+    static bool showBootSplash(uint8_t displayId);
+
 private:
     static const uint8_t MAX_DISPLAYS = 3;
     static DisplayInfo _displays[MAX_DISPLAYS];

@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Doki OS - WiFi Setup</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        .container {
+            background: white;
+            border-radius: 16px;
+            padding: 32px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.2);
+            max-width: 480px;
+            width: 100%;
+        }
+        h1 {
+            color: #667eea;
+            margin-bottom: 8px;
+            font-size: 2em;
+        }
+        .subtitle {
+            color: #666;
+            margin-bottom: 24px;
+            font-size: 0.95em;
+        }
+        .info {
+            background: #eff6ff;
+            border-left: 4px solid #667eea;
+            padding: 12px;
+            margin-bottom: 24px;
+            border-radius: 4px;
+            font-size: 0.9em;
+            color: #1e40af;
+        }
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #333;
+            font-weight: 600;
+        }
+        input {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e5e7eb;
+            border-radius: 8px;
+            font-size: 1em;
+            margin-bottom: 16px;
+            transition: border-color 0.2s;
+        }
+        input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        button {
+            width: 100%;
+            padding: 14px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 1.05em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        button:hover { background: #5568d3; }
+        button:disabled {
+            background: #9ca3af;
+            cursor: not-allowed;
+        }
+        .message {
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 16px;
+            display: none;
+        }
+        .message.success {
+            background: #d1fae5;
+            color: #065f46;
+            display: block;
+        }
+        .message.error {
+            background: #fee2e2;
+            color: #991b1b;
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎨 Doki OS</h1>
+        <p class="subtitle">WiFi Configuration</p>
+
+        <div class="info">
+            💡 Enter your WiFi credentials below. Leave password blank for open networks.
+        </div>
+
+        <div id="message" class="message"></div>
+
+        <form id="wifiForm" onsubmit="saveWiFi(event)">
+            <label for="ssid">Network Name (SSID)</label>
+            <input type="text" id="ssid" name="ssid" required placeholder="Enter WiFi network name" autocomplete="off">
+
+            <label for="password">Password (optional for open networks)</label>
+            <input type="password" id="password" name="password" placeholder="Leave blank for open WiFi" autocomplete="off">
+
+            <button type="submit" id="submitBtn">Connect to WiFi</button>
+        </form>
+    </div>
+
+    <script>
+        function showMessage(text, type) {
+            const msg = document.getElementById('message');
+            msg.textContent = text;
+            msg.className = 'message ' + type;
+        }
+
+        async function saveWiFi(event) {
+            event.preventDefault();
+
+            const ssid = document.getElementById('ssid').value.trim();
+            const password = document.getElementById('password').value.trim();
+            const btn = document.getElementById('submitBtn');
+
+            if (!ssid) {
+                showMessage('Please enter a network name', 'error');
+                return;
+            }
+
+            btn.disabled = true;
+            btn.textContent = 'Connecting...';
+            showMessage('Saving WiFi credentials...', 'success');
+
+            try {
+                const formData = new FormData();
+                formData.append('ssid', ssid);
+                formData.append('password', password);
+
+                const res = await fetch('/save', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await res.json();
+
+                if (data.success) {
+                    showMessage('✓ WiFi configured! Restarting device...', 'success');
+                    setTimeout(() => {
+                        showMessage('Device restarted. You can close this page.', 'success');
+                    }, 3500);
+                } else {
+                    showMessage('Error: ' + (data.error || 'Unknown error'), 'error');
+                    btn.disabled = false;
+                    btn.textContent = 'Connect to WiFi';
+                }
+
+            } catch (err) {
+                showMessage('Connection error. Please try again.', 'error');
+                btn.disabled = false;
+                btn.textContent = 'Connect to WiFi';
+            }
+        }
+    </script>
+</body>
+</html>

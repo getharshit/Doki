@@ -16,7 +16,7 @@
 #define LV_COLOR_DEPTH 16
 
 /* Swap the 2 bytes of RGB565 color. Useful if the display has an 8-bit interface (e.g. SPI) */
-#define LV_COLOR_16_SWAP 1
+#define LV_COLOR_16_SWAP 0
 
 /* Enable more complex drawing routines to manage screens transparency */
 #define LV_COLOR_SCREEN_TRANSP 0
@@ -187,7 +187,7 @@
 #define LV_USE_FS_FATFS 0
 
 /* Enable PNG decoder (useful for icons later) */
-#define LV_USE_PNG 0
+#define LV_USE_PNG 1
 
 /* Enable BMP decoder */
 #define LV_USE_BMP 0

@@ -1,17 +1,26 @@
 /**
- * @file main.cpp
- * @brief Dual Display System with HTTP Control
- * 
- * Supports independent app control per display via web dashboard
+ * @file main.cpp (REFACTORED - HYBRID APPROACH)
+ * @brief Doki OS - Clean Modular Architecture with Working Display Init
+ *
+ * This version combines:
+ * - Original working LVGL display initialization
+ * - New modular architecture (StorageManager, WiFiManager, SetupPortal, QRGenerator)
+ * - Clean separation of concerns
  */
 
 #include <Arduino.h>
 #include <WiFi.h>
 #include <SPI.h>
 #include <lvgl.h>
-#include <ESPAsyncWebServer.h>
-#include <ArduinoJson.h>
+
+// Doki OS Modules
+#include "doki/storage_manager.h"
+#include "doki/wifi_manager.h"
+#include "doki/setup_portal.h"
+#include "doki/qr_generator.h"
+#include "doki/app_manager.h"
 #include "doki/weather_service.h"
+#include "doki/simple_http_server.h"
 
 // Import apps
 #include "apps/clock_app/clock_app.h"
@@ -22,66 +31,82 @@
 #include "apps/blank_app/blank_app.h"
 
 // ========================================
-// Configuration
+// Hardware Configuration
 // ========================================
-const char* WIFI_SSID = "Abhi";
-const char* WIFI_PASSWORD = "";
-const char* WEATHER_API_KEY = "3183db8ec2fe4abfa2c133226251310";
 
-// Display Hardware
+// Display Pins (from original working configuration)
 #define DISP0_CS 33
 #define DISP0_DC 15
 #define DISP0_RST 16
+
 #define DISP1_CS 34
 #define DISP1_DC 17
 #define DISP1_RST 18
-#define TFT_MOSI 37
+
+// SPI Pins
 #define TFT_SCLK 36
+#define TFT_MOSI 37
+
+// Display Configuration
 #define TFT_WIDTH 240
 #define TFT_HEIGHT 320
+#define DISPLAY_COUNT 2
 
 // ST7789 Commands
 #define ST7789_SWRESET 0x01
 #define ST7789_SLPOUT 0x11
 #define ST7789_COLMOD 0x3A
 #define ST7789_MADCTL 0x36
-#define ST7789_NORON 0x13
-#define ST7789_DISPON 0x29
 #define ST7789_CASET 0x2A
 #define ST7789_RASET 0x2B
 #define ST7789_RAMWR 0x2C
+#define ST7789_INVON 0x21
+#define ST7789_NORON 0x13
+#define ST7789_DISPON 0x29
+
+// WiFi Configuration
+#define AP_SSID "DokiOS-Setup"
+#define AP_PASSWORD "doki1234"
+
+// Weather API
+#define WEATHER_API_KEY "3183db8ec2fe4abfa2c133226251310"
 
 // ========================================
 // Display Structure
 // ========================================
+
 struct Display {
     uint8_t id;
     uint8_t cs_pin;
     uint8_t dc_pin;
     uint8_t rst_pin;
-    
-    lv_disp_draw_buf_t draw_buf;
+
     lv_color_t* buf1;
     lv_color_t* buf2;
+    lv_disp_draw_buf_t draw_buf;
     lv_disp_drv_t disp_drv;
     lv_disp_t* disp;
-    
+
     Doki::DokiApp* app;
     String appId;
     uint32_t appStartTime;
 };
 
-// ========================================
-// Global Variables
-// ========================================
-Display displays[2];
+Display displays[DISPLAY_COUNT];
 SPIClass spi(HSPI);
-AsyncWebServer server(80);
-SemaphoreHandle_t lvgl_mutex = NULL;  // Mutex for LVGL thread safety
 
 // ========================================
-// ST7789 Functions
+// Setup Mode State
 // ========================================
+
+bool setupMode = false;
+uint32_t setupModeStartTime = 0;
+const uint32_t SETUP_MODE_TIMEOUT = 300000; // 5 minutes
+
+// ========================================
+// ST7789 Low-Level Functions
+// ========================================
+
 void writeCommand(uint8_t cs, uint8_t dc, uint8_t cmd) {
     digitalWrite(dc, LOW);
     digitalWrite(cs, LOW);
@@ -96,20 +121,19 @@ void writeData(uint8_t cs, uint8_t dc, uint8_t data) {
     digitalWrite(cs, HIGH);
 }
 
-void writeData16(uint8_t cs, uint8_t dc, uint16_t data) {
-    digitalWrite(dc, HIGH);
-    digitalWrite(cs, LOW);
-    spi.transfer16(data);
-    digitalWrite(cs, HIGH);
-}
-
 void setAddrWindow(uint8_t cs, uint8_t dc, uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1) {
     writeCommand(cs, dc, ST7789_CASET);
-    writeData16(cs, dc, x0);
-    writeData16(cs, dc, x1);
+    writeData(cs, dc, x0 >> 8);
+    writeData(cs, dc, x0 & 0xFF);
+    writeData(cs, dc, x1 >> 8);
+    writeData(cs, dc, x1 & 0xFF);
+
     writeCommand(cs, dc, ST7789_RASET);
-    writeData16(cs, dc, y0);
-    writeData16(cs, dc, y1);
+    writeData(cs, dc, y0 >> 8);
+    writeData(cs, dc, y0 & 0xFF);
+    writeData(cs, dc, y1 >> 8);
+    writeData(cs, dc, y1 & 0xFF);
+
     writeCommand(cs, dc, ST7789_RAMWR);
 }
 
@@ -117,30 +141,34 @@ void initDisplayHardware(uint8_t cs, uint8_t dc, uint8_t rst) {
     pinMode(cs, OUTPUT);
     pinMode(dc, OUTPUT);
     pinMode(rst, OUTPUT);
+
     digitalWrite(cs, HIGH);
-    digitalWrite(dc, HIGH);
-    
     digitalWrite(rst, HIGH);
     delay(10);
     digitalWrite(rst, LOW);
     delay(20);
     digitalWrite(rst, HIGH);
     delay(150);
-    
+
     writeCommand(cs, dc, ST7789_SWRESET);
     delay(150);
     writeCommand(cs, dc, ST7789_SLPOUT);
-    delay(120);
+    delay(10);
     writeCommand(cs, dc, ST7789_COLMOD);
     writeData(cs, dc, 0x55);
-    delay(10);
     writeCommand(cs, dc, ST7789_MADCTL);
     writeData(cs, dc, 0x00);
+    writeCommand(cs, dc, ST7789_INVON);
+    delay(10);
     writeCommand(cs, dc, ST7789_NORON);
     delay(10);
     writeCommand(cs, dc, ST7789_DISPON);
     delay(100);
 }
+
+// ========================================
+// LVGL Flush Callbacks
+// ========================================
 
 void lvgl_flush_display0(lv_disp_drv_t* disp, const lv_area_t* area, lv_color_t* color_p) {
     uint32_t w = (area->x2 - area->x1 + 1);
@@ -168,6 +196,10 @@ void lvgl_flush_display1(lv_disp_drv_t* disp, const lv_area_t* area, lv_color_t*
     lv_disp_flush_ready(disp);
 }
 
+// ========================================
+// Display Initialization (Original Working Code)
+// ========================================
+
 bool initDisplay(uint8_t id, uint8_t cs, uint8_t dc, uint8_t rst) {
     Display* d = &displays[id];
     d->id = id;
@@ -177,29 +209,174 @@ bool initDisplay(uint8_t id, uint8_t cs, uint8_t dc, uint8_t rst) {
     d->app = nullptr;
     d->appId = "";
     d->appStartTime = 0;
-    
+
+    // Initialize ST7789 hardware
     initDisplayHardware(cs, dc, rst);
-    
+
+    // Allocate LVGL buffers in PSRAM
     size_t buf_size = TFT_WIDTH * 40;
     d->buf1 = (lv_color_t*)heap_caps_malloc(buf_size * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
     d->buf2 = (lv_color_t*)heap_caps_malloc(buf_size * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
-    
-    if (!d->buf1 || !d->buf2) return false;
-    
+
+    if (!d->buf1 || !d->buf2) {
+        Serial.printf("[Main] ✗ Failed to allocate buffers for Display %d\n", id);
+        return false;
+    }
+
+    // Initialize LVGL display buffer
     lv_disp_draw_buf_init(&d->draw_buf, d->buf1, d->buf2, buf_size);
+
+    // Initialize LVGL display driver
     lv_disp_drv_init(&d->disp_drv);
     d->disp_drv.hor_res = TFT_WIDTH;
     d->disp_drv.ver_res = TFT_HEIGHT;
     d->disp_drv.flush_cb = (id == 0) ? lvgl_flush_display0 : lvgl_flush_display1;
     d->disp_drv.draw_buf = &d->draw_buf;
+
+    // Register LVGL display
     d->disp = lv_disp_drv_register(&d->disp_drv);
-    
-    return d->disp != nullptr;
+
+    if (d->disp == nullptr) {
+        Serial.printf("[Main] ✗ Failed to register LVGL display %d\n", id);
+        return false;
+    }
+
+    Serial.printf("[Main] ✓ Display %d initialized successfully\n", id);
+    return true;
 }
 
 // ========================================
-// App Management
+// Boot Splash
 // ========================================
+
+void showBootSplash(uint8_t displayId) {
+    if (displayId >= DISPLAY_COUNT) return;
+
+    Display* d = &displays[displayId];
+    lv_disp_set_default(d->disp);
+    lv_obj_t* screen = lv_disp_get_scr_act(d->disp);
+    lv_obj_clean(screen);
+
+    lv_obj_set_style_bg_color(screen, lv_color_hex(0x667EEA), 0);
+
+    lv_obj_t* label = lv_label_create(screen);
+    lv_label_set_text(label, "Doki OS\nv0.2.0");
+    lv_obj_set_style_text_color(label, lv_color_white(), 0);
+    lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_center(label);
+}
+
+// ========================================
+// Setup Mode Functions
+// ========================================
+
+void enterSetupMode() {
+    Serial.println("\n╔═══════════════════════════════════════════════════╗");
+    Serial.println("║           ENTERING SETUP MODE                      ║");
+    Serial.println("╚═══════════════════════════════════════════════════╝\n");
+
+    setupMode = true;
+    setupModeStartTime = millis();
+
+    // Start Access Point
+    if (!Doki::WiFiManager::startAccessPoint(AP_SSID, AP_PASSWORD)) {
+        Serial.println("[Main] ✗ Failed to start Access Point");
+        return;
+    }
+
+    // Start Setup Portal
+    if (!Doki::SetupPortal::begin()) {
+        Serial.println("[Main] ✗ Failed to start Setup Portal");
+        return;
+    }
+
+    // Get setup URL
+    String setupURL = "http://" + WiFi.softAPIP().toString() + "/setup";
+
+    // Display 1: Step 1 - Connect to WiFi AP
+    Serial.println("[Main] Setting up Display 1 - Step 1...");
+    lv_disp_set_default(displays[1].disp);
+    lv_obj_t* screen1 = lv_disp_get_scr_act(displays[1].disp);
+    lv_obj_clean(screen1);
+    lv_obj_set_style_bg_color(screen1, lv_color_hex(0x1F2937), 0);
+
+    // Main heading: DOKI OS
+    lv_obj_t* heading = lv_label_create(screen1);
+    lv_label_set_text(heading, "DOKI OS");
+    lv_obj_align(heading, LV_ALIGN_TOP_MID, 0, 20);
+    lv_obj_set_style_text_color(heading, lv_color_hex(0x667EEA), 0);
+    lv_obj_set_style_text_font(heading, &lv_font_montserrat_32, 0);
+
+    // Subheading: Step 1
+    lv_obj_t* subheading = lv_label_create(screen1);
+    lv_label_set_text(subheading, "Step 1: Connect to WiFi");
+    lv_obj_align(subheading, LV_ALIGN_TOP_MID, 0, 65);
+    lv_obj_set_style_text_color(subheading, lv_color_hex(0x10B981), 0);
+    lv_obj_set_style_text_font(subheading, &lv_font_montserrat_20, 0);
+
+    // WiFi Details
+    lv_obj_t* details = lv_label_create(screen1);
+    lv_label_set_text(details, "Network Name:\nDokiOS-Setup\n\nPassword:\ndoki1234");
+    lv_obj_align(details, LV_ALIGN_CENTER, 0, 20);
+    lv_obj_set_style_text_color(details, lv_color_white(), 0);
+    lv_obj_set_style_text_align(details, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(details, &lv_font_montserrat_18, 0);
+
+    // Footer instruction
+    lv_obj_t* footer1 = lv_label_create(screen1);
+    lv_label_set_text(footer1, "See other display for Step 2");
+    lv_obj_align(footer1, LV_ALIGN_BOTTOM_MID, 0, -15);
+    lv_obj_set_style_text_color(footer1, lv_color_hex(0x888888), 0);
+    lv_obj_set_style_text_font(footer1, &lv_font_montserrat_12, 0);
+
+    // Display 0: Step 2 - QR Code
+    Serial.println("[Main] Setting up Display 0 - Step 2 with QR code...");
+    lv_disp_set_default(displays[0].disp);
+    lv_obj_t* screen0 = lv_disp_get_scr_act(displays[0].disp);
+    lv_obj_clean(screen0);
+    lv_obj_set_style_bg_color(screen0, lv_color_hex(0x000000), 0);
+
+    // Step 2 heading
+    lv_obj_t* step2heading = lv_label_create(screen0);
+    lv_label_set_text(step2heading, "Step 2");
+    lv_obj_align(step2heading, LV_ALIGN_TOP_MID, 0, 15);
+    lv_obj_set_style_text_color(step2heading, lv_color_hex(0x667EEA), 0);
+    lv_obj_set_style_text_font(step2heading, &lv_font_montserrat_24, 0);
+
+    // QR Code for setup URL (larger size with scale=4)
+    lv_obj_t* qr = Doki::QRGenerator::displayURLQR(screen0, setupURL, -1, 60, 4);
+    if (qr) {
+        lv_obj_align(qr, LV_ALIGN_CENTER, 0, 0);
+    }
+
+    // Instructions below QR
+    lv_obj_t* instructions = lv_label_create(screen0);
+    lv_label_set_text(instructions, "Scan to visit\nsetup page");
+    lv_obj_align(instructions, LV_ALIGN_BOTTOM_MID, 0, -20);
+    lv_obj_set_style_text_color(instructions, lv_color_white(), 0);
+    lv_obj_set_style_text_align(instructions, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(instructions, &lv_font_montserrat_14, 0);
+
+    // Force render both displays
+    Serial.println("[Main] Rendering displays...");
+    lv_timer_handler();
+    delay(100);
+    lv_timer_handler();
+
+    Serial.printf("\n[Main] Connect to: %s (Password: %s)\n", AP_SSID, AP_PASSWORD);
+    Serial.printf("[Main] Then visit: %s\n\n", setupURL.c_str());
+}
+
+void exitSetupMode() {
+    Serial.println("[Main] Exiting setup mode...");
+    setupMode = false;
+    Doki::SetupPortal::stop();
+}
+
+// ========================================
+// Normal Mode Functions
+// ========================================
+
 Doki::DokiApp* createApp(const String& appId) {
     if (appId == "clock") return new ClockApp();
     if (appId == "weather") return new WeatherApp();
@@ -211,473 +388,194 @@ Doki::DokiApp* createApp(const String& appId) {
 }
 
 bool loadAppOnDisplay(uint8_t displayId, const String& appId) {
-    if (displayId >= 2) return false;
-    
+    if (displayId >= DISPLAY_COUNT) return false;
+
     Display* d = &displays[displayId];
-    
-    // Unload current app (outside mutex)
+
+    // Set display context and clear screen FIRST
+    lv_disp_set_default(d->disp);
+    lv_obj_t* screen = lv_disp_get_scr_act(d->disp);
+    lv_obj_clean(screen);  // Clear screen before destroying app to prevent dangling pointers
+
+    // Now destroy old app after screen is cleaned
     if (d->app) {
-        Serial.printf("[Display %d] Unloading '%s'\n", displayId, d->appId.c_str());
-        d->app->onPause();
         d->app->onDestroy();
         delete d->app;
         d->app = nullptr;
-        d->appId = "";
     }
-    
-    Serial.printf("[Display %d] Loading '%s'\n", displayId, appId.c_str());
-    
-    // Create new app (outside mutex)
-    Doki::DokiApp* newApp = createApp(appId);
-    if (!newApp) {
-        Serial.printf("[Display %d] Failed to create app '%s'\n", displayId, appId.c_str());
+
+    // Create and load new app
+    d->app = createApp(appId);
+    if (!d->app) {
+        Serial.printf("[Main] ✗ Failed to create app '%s'\n", appId.c_str());
         return false;
     }
-    
-    // LOCK only for LVGL operations (very brief)
-    if (lvgl_mutex) xSemaphoreTake(lvgl_mutex, portMAX_DELAY);
-    
-    // Set LVGL context
-    lv_disp_set_default(d->disp);
-    
-    // Clear screen
-    lv_obj_clean(lv_scr_act());
-    lv_obj_set_style_bg_color(lv_scr_act(), lv_color_hex(0x000000), 0);
-    
-    // Create app UI (this is fast with native LVGL animations)
-    newApp->onCreate();
-    
-    // UNLOCK immediately
-    if (lvgl_mutex) xSemaphoreGive(lvgl_mutex);
-    
-    // Update app state
-    d->app = newApp;
+
+    // Initialize app on clean screen
+    d->app->onCreate();
+    d->app->onStart();
+
     d->appId = appId;
     d->appStartTime = millis();
-    
-    newApp->_setState(Doki::AppState::CREATED);
-    newApp->onStart();
-    newApp->_setState(Doki::AppState::STARTED);
-    newApp->_markStarted();
-    
-    Serial.printf("[Display %d] ✓ '%s' loaded\n", displayId, appId.c_str());
+
+    Serial.printf("[Main] ✓ Loaded app '%s' on Display %d\n", appId.c_str(), displayId);
     return true;
 }
 
+
 // ========================================
-// HTTP API Handlers
+// HTTP Server Callbacks
 // ========================================
-void handleLoadAppOnDisplay(AsyncWebServerRequest* request) {
-    if (!request->hasParam("display") || !request->hasParam("app")) {
-        request->send(400, "application/json", "{\"error\":\"Missing display or app parameter\"}");
+
+void getDisplayStatus(uint8_t displayId, String& appId, uint32_t& uptime) {
+    if (displayId >= DISPLAY_COUNT) {
+        appId = "";
+        uptime = 0;
         return;
     }
-    
-    int displayId = request->getParam("display")->value().toInt();
-    String appId = request->getParam("app")->value();
-    
-    if (displayId < 0 || displayId >= 2) {
-        request->send(400, "application/json", "{\"error\":\"Invalid display ID\"}");
-        return;
-    }
-    
-    uint32_t startTime = millis();
-    bool success = loadAppOnDisplay(displayId, appId);
-    uint32_t loadTime = millis() - startTime;
-    
-    if (success) {
-        JsonDocument doc;
-        doc["status"] = "success";
-        doc["display"] = displayId;
-        doc["app"] = appId;
-        doc["load_time_ms"] = loadTime;
-        String response;
-        serializeJson(doc, response);
-        request->send(200, "application/json", response);
+    appId = displays[displayId].appId;
+    uptime = displays[displayId].app ? (millis() - displays[displayId].appStartTime) / 1000 : 0;
+}
+
+void enterNormalMode() {
+    Serial.println("\n╔═══════════════════════════════════════════════════╗");
+    Serial.println("║         NORMAL MODE - Loading Apps                ║");
+    Serial.println("╚═══════════════════════════════════════════════════╝\n");
+
+    // Initialize weather service
+    Doki::WeatherService::init(WEATHER_API_KEY);
+
+    // Set HTTP server callbacks
+    Doki::SimpleHttpServer::setLoadAppCallback(loadAppOnDisplay);
+    Doki::SimpleHttpServer::setStatusCallback(getDisplayStatus);
+
+    // Start HTTP server
+    if (Doki::SimpleHttpServer::begin(80)) {
+        String ip = WiFi.localIP().toString();
+        Serial.println("\n╔═══════════════════════════════════════════════════╗");
+        Serial.println("║            System Connected                        ║");
+        Serial.println("╚═══════════════════════════════════════════════════╝");
+        Serial.printf("\n📱 Dashboard: http://%s\n", ip.c_str());
+        Serial.printf("🌐 IP Address: %s\n\n", ip.c_str());
     } else {
-        request->send(500, "application/json", "{\"error\":\"Failed to load app\"}");
+        Serial.println("[Main] ✗ Failed to start HTTP server");
     }
-}
 
-void handleDisplaysStatus(AsyncWebServerRequest* request) {
-    JsonDocument doc;
-    JsonArray disps = doc["displays"].to<JsonArray>();
-    
-    for (int i = 0; i < 2; i++) {
-        JsonObject d = disps.add<JsonObject>();
-        d["id"] = i;
-        d["app"] = displays[i].appId;
-        d["uptime_ms"] = displays[i].app ? (millis() - displays[i].appStartTime) : 0;
-        d["running"] = displays[i].app != nullptr;
-    }
-    
-    doc["total_displays"] = 2;
-    
-    String response;
-    serializeJson(doc, response);
-    request->send(200, "application/json", response);
-}
+    // Load default apps
+    loadAppOnDisplay(0, "clock");
+    loadAppOnDisplay(1, "weather");
 
-void handleSystemStatus(AsyncWebServerRequest* request) {
-    JsonDocument doc;
-    doc["doki_version"] = "0.1.0";
-    doc["uptime_seconds"] = millis() / 1000;
-    
-    JsonObject wifi = doc["wifi"].to<JsonObject>();
-    wifi["connected"] = WiFi.status() == WL_CONNECTED;
-    wifi["ssid"] = WiFi.SSID();
-    wifi["rssi"] = WiFi.RSSI();
-    wifi["ip"] = WiFi.localIP().toString();
-    
-    JsonObject memory = doc["memory"].to<JsonObject>();
-    memory["free_heap"] = ESP.getFreeHeap();
-    memory["total_heap"] = ESP.getHeapSize();
-    memory["free_psram"] = ESP.getFreePsram();
-    memory["total_psram"] = ESP.getPsramSize();
-    
-    String response;
-    serializeJson(doc, response);
-    request->send(200, "application/json", response);
-}
-
-void handleDashboard(AsyncWebServerRequest* request) {
-    String html = R"rawliteral(
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Doki OS - Dual Display Dashboard</title>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            padding: 20px;
-        }
-        .container { max-width: 1200px; margin: 0 auto; }
-        .card {
-            background: white;
-            border-radius: 12px;
-            padding: 24px;
-            margin-bottom: 20px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-        }
-        h1 { color: #667eea; margin-bottom: 8px; }
-        h2 { color: #333; margin-bottom: 16px; font-size: 1.2em; }
-        .displays-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
-            gap: 20px;
-        }
-        .display-card {
-            background: #f9fafb;
-            border-radius: 12px;
-            padding: 20px;
-            border: 3px solid #e5e7eb;
-        }
-        .display-card.active { border-color: #10b981; background: #ecfdf5; }
-        .display-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 16px;
-        }
-        .display-title {
-            font-size: 1.3em;
-            font-weight: 600;
-            color: #111827;
-        }
-        .display-status {
-            padding: 4px 12px;
-            border-radius: 12px;
-            font-size: 0.85em;
-            font-weight: 600;
-        }
-        .status-active { background: #10b981; color: white; }
-        .status-empty { background: #6b7280; color: white; }
-        .current-app {
-            background: white;
-            padding: 16px;
-            border-radius: 8px;
-            margin-bottom: 16px;
-        }
-        .app-name { font-size: 1.1em; font-weight: 600; color: #667eea; }
-        .app-uptime { color: #6b7280; font-size: 0.9em; margin-top: 4px; }
-        .app-buttons {
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 8px;
-        }
-        .btn {
-            padding: 10px;
-            background: #667eea;
-            color: white;
-            border: none;
-            border-radius: 8px;
-            cursor: pointer;
-            font-size: 0.9em;
-            transition: all 0.2s;
-        }
-        .btn:hover { background: #5568d3; transform: translateY(-1px); }
-        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-        .btn.loading {
-            opacity: 0.6;
-            pointer-events: none;
-        }
-        .spinner {
-            display: inline-block;
-            width: 14px;
-            height: 14px;
-            border: 2px solid white;
-            border-top-color: transparent;
-            border-radius: 50%;
-            animation: spin 0.6s linear infinite;
-            margin-left: 6px;
-            vertical-align: middle;
-        }
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
-        .info-grid {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 12px;
-            margin: 16px 0;
-        }
-        .info-item {
-            padding: 12px;
-            background: #f9fafb;
-            border-radius: 8px;
-        }
-        .info-label { font-size: 0.85em; color: #6b7280; }
-        .info-value { font-size: 1.1em; font-weight: 600; color: #111827; margin-top: 4px; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="card">
-            <h1>🎨 Doki OS - Dual Display Dashboard</h1>
-            <p style="color: #10b981; font-weight: bold;">✓ Connected</p>
-        </div>
-
-        <div class="card">
-            <h2>📊 System Status</h2>
-            <div class="info-grid">
-                <div class="info-item">
-                    <div class="info-label">Uptime</div>
-                    <div class="info-value" id="uptime">-</div>
-                </div>
-                <div class="info-item">
-                    <div class="info-label">Heap Memory</div>
-                    <div class="info-value" id="heap">-</div>
-                </div>
-                <div class="info-item">
-                    <div class="info-label">WiFi</div>
-                    <div class="info-value" id="wifi">-</div>
-                </div>
-            </div>
-        </div>
-
-        <div class="card">
-            <h2>🖥️ Displays</h2>
-            <div class="displays-grid" id="displaysGrid">
-                <div>Loading...</div>
-            </div>
-        </div>
-    </div>
-
-    <script>
-        const API = window.location.origin + '/api';
-        const apps = [
-            { id: 'clock', name: '⏰ Clock' },
-            { id: 'weather', name: '🌤️ Weather' },
-            { id: 'sysinfo', name: '📊 System' },
-            { id: 'blank', name: '🌟 Screensaver' },
-            { id: 'hello', name: '👋 Hello' },
-            { id: 'goodbye', name: '👋 Goodbye' }
-        ];
-
-        async function loadData() {
-            try {
-                const [status, displays] = await Promise.all([
-                    fetch(API + '/system/status').then(r => r.json()),
-                    fetch(API + '/displays/status').then(r => r.json())
-                ]);
-
-                // Update system info
-                document.getElementById('uptime').textContent = status.uptime_seconds + 's';
-                document.getElementById('heap').textContent = 
-                    Math.round((status.memory.total_heap - status.memory.free_heap) / 1024) + ' KB';
-                document.getElementById('wifi').textContent = status.wifi.rssi + ' dBm';
-
-                // Update displays
-                const grid = document.getElementById('displaysGrid');
-                grid.innerHTML = displays.displays.map(d => `
-                    <div class="display-card ${d.running ? 'active' : ''}">
-                        <div class="display-header">
-                            <div class="display-title">Display ${d.id}</div>
-                            <span class="display-status ${d.running ? 'status-active' : 'status-empty'}">
-                                ${d.running ? 'ACTIVE' : 'EMPTY'}
-                            </span>
-                        </div>
-                        ${d.running ? `
-                            <div class="current-app">
-                                <div class="app-name">📱 ${d.app}</div>
-                                <div class="app-uptime">Uptime: ${Math.floor(d.uptime_ms / 1000)}s</div>
-                            </div>
-                        ` : '<div style="padding: 20px; text-align: center; color: #6b7280;">No app loaded</div>'}
-                        <div class="app-buttons">
-                            ${apps.map(app => `
-                                <button class="btn" onclick="loadApp(${d.id}, '${app.id}')" 
-                                        id="btn-${d.id}-${app.id}">
-                                    ${app.name}
-                                </button>
-                            `).join('')}
-                        </div>
-                    </div>
-                `).join('');
-            } catch (err) {
-                console.error('Error loading data:', err);
-            }
-        }
-
-        async function loadApp(displayId, appId) {
-            const btn = document.getElementById(`btn-${displayId}-${appId}`);
-            if (!btn) return;
-
-            const originalText = btn.textContent;
-            btn.classList.add('loading');
-            btn.innerHTML = originalText + '<span class="spinner"></span>';
-
-            try {
-                const res = await fetch(
-                    `${API}/display/load?display=${displayId}&app=${appId}`,
-                    { method: 'POST' }
-                );
-                const data = await res.json();
-
-                if (data.status === 'success') {
-                    setTimeout(() => {
-                        loadData();
-                        btn.classList.remove('loading');
-                        btn.textContent = originalText;
-                    }, 500);
-                } else {
-                    alert('Failed to load app: ' + (data.error || 'Unknown error'));
-                    btn.classList.remove('loading');
-                    btn.textContent = originalText;
-                }
-            } catch (err) {
-                alert('Failed to load app');
-                btn.classList.remove('loading');
-                btn.textContent = originalText;
-            }
-        }
-
-        loadData();
-        setInterval(loadData, 2000);
-    </script>
-</body>
-</html>
-)rawliteral";
-    
-    request->send(200, "text/html", html);
+    Serial.println("\n[Main] ✓ System ready!\n");
 }
 
 // ========================================
 // Setup
 // ========================================
+
 void setup() {
     Serial.begin(115200);
     delay(1000);
-    
+
     Serial.println("\n╔═══════════════════════════════════════════════════╗");
-    Serial.println("║    🎨 Doki OS - Dual Display + HTTP Control      ║");
+    Serial.println("║         Doki OS - Refactored Architecture         ║");
+    Serial.println("║                  Version 0.2.0                     ║");
     Serial.println("╚═══════════════════════════════════════════════════╝\n");
-    
-    // Create LVGL mutex for thread safety
-    lvgl_mutex = xSemaphoreCreateMutex();
-    if (!lvgl_mutex) {
-        Serial.println("FATAL: Failed to create LVGL mutex!");
-        while(1) delay(1000);
+
+    // Step 1: Initialize Storage
+    Serial.println("[Main] Step 1/5: Initializing storage...");
+    if (!Doki::StorageManager::init()) {
+        Serial.println("[Main] ✗ Storage initialization failed!");
+        while (1) delay(1000);
     }
-    Serial.println("✓ LVGL mutex created");
-    
-    // Initialize SPI
+
+    // Check for saved WiFi credentials
+    String savedSSID, savedPassword;
+    bool hasCredentials = Doki::StorageManager::loadWiFiCredentials(savedSSID, savedPassword);
+    if (hasCredentials) {
+        Serial.printf("[Main] Found saved WiFi: %s\n", savedSSID.c_str());
+    } else {
+        Serial.println("[Main] No saved WiFi credentials");
+    }
+
+    // Step 2: Initialize LVGL
+    Serial.println("\n[Main] Step 2/5: Initializing LVGL...");
+    lv_init();
+    Serial.println("[Main] ✓ LVGL initialized");
+
+    // Step 3: Initialize Displays (Using Original Working Code)
+    Serial.println("\n[Main] Step 3/5: Initializing displays...");
+
     spi.begin(TFT_SCLK, -1, TFT_MOSI);
     spi.setFrequency(40000000);
-    
-    // Initialize LVGL
-    lv_init();
-    
-    // Initialize displays
+
     if (!initDisplay(0, DISP0_CS, DISP0_DC, DISP0_RST) ||
         !initDisplay(1, DISP1_CS, DISP1_DC, DISP1_RST)) {
-        Serial.println("FATAL: Display init failed!");
-        while(1) delay(1000);
+        Serial.println("[Main] ✗ Display initialization failed!");
+        while (1) delay(1000);
     }
-    
-    // Connect WiFi
-    WiFi.mode(WIFI_STA);
-    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-    while (WiFi.status() != WL_CONNECTED) {
-        delay(500);
-        Serial.print(".");
+
+    // Show boot splash
+    Serial.println("[Main] Showing boot splash...");
+    showBootSplash(0);
+    showBootSplash(1);
+    lv_timer_handler();
+    delay(2000);
+
+    // Step 4: Initialize WiFi Manager
+    Serial.println("\n[Main] Step 4/5: Initializing WiFi...");
+    if (!Doki::WiFiManager::init()) {
+        Serial.println("[Main] ✗ WiFi Manager initialization failed!");
+        while (1) delay(1000);
     }
-    Serial.printf("\n✓ WiFi: %s\n", WiFi.localIP().toString().c_str());
-    
-    // Initialize services
-    Doki::WeatherService::init(WEATHER_API_KEY);
-    
-    // Setup HTTP server
-    server.on("/api/display/load", HTTP_POST, handleLoadAppOnDisplay);
-    server.on("/api/displays/status", HTTP_GET, handleDisplaysStatus);
-    server.on("/api/system/status", HTTP_GET, handleSystemStatus);
-    server.on("/", HTTP_GET, handleDashboard);
-    server.on("/dashboard", HTTP_GET, handleDashboard);
-    
-    DefaultHeaders::Instance().addHeader("Access-Control-Allow-Origin", "*");
-    server.begin();
-    
-    Serial.printf("\n📱 Dashboard: http://%s/dashboard\n\n", WiFi.localIP().toString().c_str());
-    
-    // Load default apps
-    loadAppOnDisplay(0, "clock");
-    loadAppOnDisplay(1, "weather");
-    
-    Serial.println("✓ System ready! Open dashboard to control displays.\n");
+
+    // Step 5: Connect to WiFi or Enter Setup Mode
+    Serial.println("\n[Main] Step 5/5: Connecting to WiFi...");
+
+    bool connected = false;
+    if (hasCredentials) {
+        Serial.println("[Main] Attempting to connect with saved credentials...");
+        connected = Doki::WiFiManager::connectToWiFi(savedSSID, savedPassword, 10000);
+    }
+
+    if (!connected) {
+        Serial.println("[Main] Auto-connect failed or no credentials");
+        enterSetupMode();
+    } else {
+        Serial.printf("[Main] ✓ Connected to WiFi: %s\n", WiFi.localIP().toString().c_str());
+        enterNormalMode();
+    }
+
+    Serial.println("\n[Main] ✓ Setup complete!\n");
 }
 
+// ========================================
+// Loop
+// ========================================
+
 void loop() {
-    static uint32_t lastPerfReport = 0;
-    static uint32_t updateCount = 0;
-    
-    uint32_t now = millis();
-    
-    // Always update apps and render - mutex only protects app loading
-    for (int i = 0; i < 2; i++) {
-        if (displays[i].app) {
-            lv_disp_set_default(displays[i].disp);
-            displays[i].app->onUpdate();
+    if (setupMode) {
+        // Setup Mode: Handle captive portal
+        Doki::SetupPortal::update();
+
+        // Check for timeout
+        if (millis() - setupModeStartTime > SETUP_MODE_TIMEOUT) {
+            Serial.println("[Main] Setup mode timeout - restarting...");
+            ESP.restart();
         }
+    } else {
+        // Normal Mode: Update apps
+        for (uint8_t i = 0; i < DISPLAY_COUNT; i++) {
+            if (displays[i].app) {
+                lv_disp_set_default(displays[i].disp);
+                displays[i].app->onUpdate();
+            }
+        }
+
+        // Handle WiFi reconnection
+        Doki::WiFiManager::handleReconnection();
     }
-    
-    // Let LVGL render
+
+    // Always update LVGL
     lv_timer_handler();
-    
-    updateCount++;
-    
-    // Print performance report every 5 seconds
-    if (now - lastPerfReport >= 5000) {
-        Serial.printf("[PERF] Loop FPS: ~%d, Display 0: %s, Display 1: %s\n", 
-                     updateCount / 5,
-                     displays[0].appId.c_str(), 
-                     displays[1].appId.c_str());
-        lastPerfReport = now;
-        updateCount = 0;
-    }
-    
-    yield();
+    delay(5);
 }
