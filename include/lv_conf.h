@@ -28,13 +28,13 @@
    MEMORY SETTINGS
  *=========================*/
 
-/* Use standard memory allocation (we'll manually use PSRAM for buffers) */
-#define LV_MEM_CUSTOM 0
+/* Use PSRAM for LVGL memory allocation (ESP32-S3 has 2MB PSRAM) */
+#define LV_MEM_CUSTOM 1
 #if LV_MEM_CUSTOM == 1
-    #define LV_MEM_CUSTOM_INCLUDE <stdlib.h>
-    #define LV_MEM_CUSTOM_ALLOC   malloc
+    #define LV_MEM_CUSTOM_INCLUDE "doki/lvgl_mem.h"
+    #define LV_MEM_CUSTOM_ALLOC   lv_psram_malloc
     #define LV_MEM_CUSTOM_FREE    free
-    #define LV_MEM_CUSTOM_REALLOC realloc
+    #define LV_MEM_CUSTOM_REALLOC lv_psram_realloc
 #else
     #define LV_MEM_SIZE (64U * 1024U)  /* 64KB for LVGL internal memory */
     #define LV_MEM_ADR 0              /* Address for memory pool (not used) */
@@ -86,8 +86,8 @@
 /* Enable complex draw engine (for shadows, gradients, etc.) */
 #define LV_DRAW_COMPLEX 1
 
-/* Default image cache size. 0 to disable caching */
-#define LV_IMG_CACHE_DEF_SIZE 0
+/* Default image cache size. Cache 2 images (240x320x2 bytes ~= 150KB each) */
+#define LV_IMG_CACHE_DEF_SIZE 2
 
 /* Maximum buffer size to allocate for rotation */
 #define LV_DISP_ROT_MAX_BUF (10*1024)
@@ -193,7 +193,7 @@
 #define LV_USE_BMP 0
 
 /* Enable JPG decoder */
-#define LV_USE_SJPG 0
+#define LV_USE_SJPG 1
 
 /* Enable GIF decoder */
 #define LV_USE_GIF 1

@@ -56,11 +56,27 @@ private:
     static bool (*_loadAppCallback)(uint8_t, const String&);
     static void (*_statusCallback)(uint8_t, String&, uint32_t&);
 
+    // HTTP request handlers
     static void handleGetApps(AsyncWebServerRequest* request);
     static void handleLoadApp(AsyncWebServerRequest* request);
     static void handleGetStatus(AsyncWebServerRequest* request);
     static void handleDashboard(AsyncWebServerRequest* request);
+    static void handleMediaInfo(AsyncWebServerRequest* request);
+    static void handleMediaDelete(AsyncWebServerRequest* request);
+    static void handleMediaUpload(AsyncWebServerRequest* request,
+                                  const String& filename,
+                                  size_t index,
+                                  uint8_t* data,
+                                  size_t len,
+                                  bool final);
+
+    // HTML generation
     static String generateDashboardHTML();
+
+    // Upload state management
+    static uint8_t _uploadDisplayId;
+    static String _uploadMediaType;
+    static std::vector<uint8_t> _uploadBuffer;
 };
 
 } // namespace Doki

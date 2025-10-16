@@ -21,6 +21,9 @@
 #include "doki/app_manager.h"
 #include "doki/weather_service.h"
 #include "doki/simple_http_server.h"
+#include "doki/filesystem_manager.h"
+#include "doki/media_service.h"
+#include "doki/lvgl_fs_driver.h"
 
 // Import apps
 #include "apps/clock_app/clock_app.h"
@@ -29,6 +32,8 @@
 #include "apps/hello_app/hello_app.h"
 #include "apps/goodbye_app/goodbye_app.h"
 #include "apps/blank_app/blank_app.h"
+#include "apps/image_preview/image_preview.h"
+#include "apps/gif_player/gif_player.h"
 
 // ========================================
 // Hardware Configuration
@@ -377,13 +382,15 @@ void exitSetupMode() {
 // Normal Mode Functions
 // ========================================
 
-Doki::DokiApp* createApp(const String& appId) {
+Doki::DokiApp* createApp(const String& appId, uint8_t displayId) {
     if (appId == "clock") return new ClockApp();
     if (appId == "weather") return new WeatherApp();
     if (appId == "sysinfo") return new SysInfoApp();
     if (appId == "hello") return new HelloApp();
     if (appId == "goodbye") return new GoodbyeApp();
     if (appId == "blank") return new BlankApp();
+    if (appId == "image") return new ImagePreviewApp(displayId);
+    if (appId == "gif") return new GifPlayerApp(displayId);
     return nullptr;
 }
 
@@ -392,20 +399,27 @@ bool loadAppOnDisplay(uint8_t displayId, const String& appId) {
 
     Display* d = &displays[displayId];
 
-    // Set display context and clear screen FIRST
+    // Set display context
     lv_disp_set_default(d->disp);
     lv_obj_t* screen = lv_disp_get_scr_act(d->disp);
-    lv_obj_clean(screen);  // Clear screen before destroying app to prevent dangling pointers
 
-    // Now destroy old app after screen is cleaned
+    // Destroy old app first
     if (d->app) {
         d->app->onDestroy();
         delete d->app;
         d->app = nullptr;
     }
 
+    // Clear screen and fill with black
+    lv_obj_clean(screen);
+    lv_obj_set_style_bg_color(screen, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
+
+    // Force LVGL to process pending tasks and complete rendering
+    lv_timer_handler();
+
     // Create and load new app
-    d->app = createApp(appId);
+    d->app = createApp(appId, displayId);
     if (!d->app) {
         Serial.printf("[Main] ✗ Failed to create app '%s'\n", appId.c_str());
         return false;
@@ -481,8 +495,8 @@ void setup() {
     Serial.println("║                  Version 0.2.0                     ║");
     Serial.println("╚═══════════════════════════════════════════════════╝\n");
 
-    // Step 1: Initialize Storage
-    Serial.println("[Main] Step 1/5: Initializing storage...");
+    // Step 1: Initialize Storage (NVS for WiFi credentials)
+    Serial.println("[Main] Step 1/6: Initializing storage...");
     if (!Doki::StorageManager::init()) {
         Serial.println("[Main] ✗ Storage initialization failed!");
         while (1) delay(1000);
@@ -497,10 +511,29 @@ void setup() {
         Serial.println("[Main] No saved WiFi credentials");
     }
 
+    // Step 1.5: Initialize Filesystem (SPIFFS for media files)
+    Serial.println("\n[Main] Step 1.5/6: Initializing filesystem...");
+    if (!Doki::FilesystemManager::init(true)) {
+        Serial.println("[Main] ✗ Filesystem initialization failed!");
+        while (1) delay(1000);
+    }
+
+    // Initialize Media Service
+    if (!Doki::MediaService::init()) {
+        Serial.println("[Main] ✗ Media service initialization failed!");
+        while (1) delay(1000);
+    }
+
     // Step 2: Initialize LVGL
     Serial.println("\n[Main] Step 2/5: Initializing LVGL...");
     lv_init();
     Serial.println("[Main] ✓ LVGL initialized");
+
+    // Register LVGL filesystem driver for SPIFFS
+    if (!Doki::LvglFsDriver::init()) {
+        Serial.println("[Main] ✗ LVGL filesystem driver initialization failed!");
+        while (1) delay(1000);
+    }
 
     // Step 3: Initialize Displays (Using Original Working Code)
     Serial.println("\n[Main] Step 3/5: Initializing displays...");

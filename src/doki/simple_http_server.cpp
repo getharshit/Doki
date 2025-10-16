@@ -4,6 +4,7 @@
  */
 
 #include "doki/simple_http_server.h"
+#include "doki/media_service.h"
 #include <WiFi.h>
 
 namespace Doki {
@@ -13,6 +14,11 @@ AsyncWebServer* SimpleHttpServer::_server = nullptr;
 bool SimpleHttpServer::_running = false;
 bool (*SimpleHttpServer::_loadAppCallback)(uint8_t, const String&) = nullptr;
 void (*SimpleHttpServer::_statusCallback)(uint8_t, String&, uint32_t&) = nullptr;
+
+// Upload state
+uint8_t SimpleHttpServer::_uploadDisplayId = 0;
+String SimpleHttpServer::_uploadMediaType = "";
+std::vector<uint8_t> SimpleHttpServer::_uploadBuffer;
 
 bool SimpleHttpServer::begin(uint16_t port) {
     if (_running) {
@@ -37,6 +43,20 @@ bool SimpleHttpServer::begin(uint16_t port) {
 
     // API: Get displays status
     _server->on("/api/status", HTTP_GET, handleGetStatus);
+
+    // API: Get media info
+    _server->on("/api/media/info", HTTP_GET, handleMediaInfo);
+
+    // API: Delete media
+    _server->on("/api/media/delete", HTTP_DELETE, handleMediaDelete);
+
+    // API: Upload media (with body handler for multipart uploads)
+    _server->on("/api/media/upload", HTTP_POST,
+                [](AsyncWebServerRequest* request) {
+                    // This is called after upload is complete
+                    request->send(200, "application/json", "{\"success\":true,\"message\":\"Upload complete\"}");
+                },
+                handleMediaUpload);
 
     // Dashboard HTML
     _server->on("/", HTTP_GET, handleDashboard);
@@ -84,6 +104,8 @@ void SimpleHttpServer::handleGetApps(AsyncWebServerRequest* request) {
     apps.add("hello");
     apps.add("goodbye");
     apps.add("blank");
+    apps.add("image");
+    apps.add("gif");
 
     String response;
     serializeJson(doc, response);
@@ -229,6 +251,79 @@ String SimpleHttpServer::generateDashboardHTML() {
         }
         .message.success { background: #d1fae5; color: #065f46; display: block; }
         .message.error { background: #fee2e2; color: #991b1b; display: block; }
+        .upload-section {
+            margin-top: 32px;
+            padding: 24px;
+            background: #f9fafb;
+            border-radius: 12px;
+        }
+        .upload-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 24px;
+            margin-top: 16px;
+        }
+        .upload-card {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            border: 2px solid #e5e7eb;
+        }
+        .upload-card h3 { color: #667eea; margin-bottom: 16px; }
+        .file-input-wrapper {
+            margin: 16px 0;
+        }
+        .file-input-wrapper label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #374151;
+        }
+        .file-input {
+            display: block;
+            width: 100%;
+            padding: 8px;
+            border: 2px dashed #d1d5db;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+        .upload-btn {
+            width: 100%;
+            padding: 12px;
+            background: #10b981;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-weight: 600;
+            cursor: pointer;
+            margin-top: 12px;
+        }
+        .upload-btn:hover { background: #059669; }
+        .upload-btn:disabled { background: #9ca3af; cursor: not-allowed; }
+        .media-info {
+            margin-top: 12px;
+            padding: 12px;
+            background: #f3f4f6;
+            border-radius: 6px;
+            font-size: 0.9em;
+        }
+        .delete-btn {
+            width: 100%;
+            padding: 10px;
+            background: #ef4444;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-weight: 600;
+            cursor: pointer;
+            margin-top: 8px;
+        }
+        .delete-btn:hover { background: #dc2626; }
+        progress {
+            width: 100%;
+            height: 8px;
+            margin-top: 8px;
+        }
     </style>
 </head>
 <body>
@@ -240,6 +335,44 @@ String SimpleHttpServer::generateDashboardHTML() {
             <h2>📱 Available Apps</h2>
             <p style="color: #6b7280; margin-bottom: 16px;">Click a display above, then click an app to load it</p>
             <div class="apps-grid" id="apps"></div>
+        </div>
+        <div class="upload-section">
+            <h2>📷 Media Upload</h2>
+            <p style="color: #6b7280; margin-bottom: 16px;">Upload images (PNG/JPEG) or GIFs for each display (max 1MB, auto-resized to 240x320)</p>
+            <div class="upload-grid">
+                <div class="upload-card">
+                    <h3>Display 0</h3>
+                    <div class="file-input-wrapper">
+                        <label>Image (PNG/JPEG):</label>
+                        <input type="file" id="d0-image-file" class="file-input" accept=".png,.jpg,.jpeg">
+                        <button onclick="uploadMedia(0, 'image')" class="upload-btn" id="d0-image-btn">Upload Image</button>
+                        <progress id="d0-image-progress" value="0" max="100" style="display:none"></progress>
+                    </div>
+                    <div class="file-input-wrapper">
+                        <label>Animated GIF:</label>
+                        <input type="file" id="d0-gif-file" class="file-input" accept=".gif">
+                        <button onclick="uploadMedia(0, 'gif')" class="upload-btn" id="d0-gif-btn">Upload GIF</button>
+                        <progress id="d0-gif-progress" value="0" max="100" style="display:none"></progress>
+                    </div>
+                    <div id="d0-media-info" class="media-info"></div>
+                </div>
+                <div class="upload-card">
+                    <h3>Display 1</h3>
+                    <div class="file-input-wrapper">
+                        <label>Image (PNG/JPEG):</label>
+                        <input type="file" id="d1-image-file" class="file-input" accept=".png,.jpg,.jpeg">
+                        <button onclick="uploadMedia(1, 'image')" class="upload-btn" id="d1-image-btn">Upload Image</button>
+                        <progress id="d1-image-progress" value="0" max="100" style="display:none"></progress>
+                    </div>
+                    <div class="file-input-wrapper">
+                        <label>Animated GIF:</label>
+                        <input type="file" id="d1-gif-file" class="file-input" accept=".gif">
+                        <button onclick="uploadMedia(1, 'gif')" class="upload-btn" id="d1-gif-btn">Upload GIF</button>
+                        <progress id="d1-gif-progress" value="0" max="100" style="display:none"></progress>
+                    </div>
+                    <div id="d1-media-info" class="media-info"></div>
+                </div>
+            </div>
         </div>
     </div>
     <script>
@@ -310,13 +443,314 @@ String SimpleHttpServer::generateDashboardHTML() {
                 });
         }
 
+        function resizeImage(file, maxWidth, maxHeight, callback) {
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const img = new Image();
+                img.onload = function() {
+                    let width = img.width;
+                    let height = img.height;
+                    if (width > maxWidth || height > maxHeight) {
+                        if (width > height) {
+                            if (width > maxWidth) {
+                                height = height * (maxWidth / width);
+                                width = maxWidth;
+                            }
+                        } else {
+                            if (height > maxHeight) {
+                                width = width * (maxHeight / height);
+                                height = maxHeight;
+                            }
+                        }
+                    }
+                    const canvas = document.createElement('canvas');
+                    canvas.width = width;
+                    canvas.height = height;
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(img, 0, 0, width, height);
+                    canvas.toBlob(function(blob) {
+                        callback(blob);
+                    }, file.type, 0.9);
+                };
+                img.src = e.target.result;
+            };
+            reader.readAsDataURL(file);
+        }
+
+        function uploadMedia(displayId, type) {
+            const fileInput = document.getElementById('d' + displayId + '-' + type + '-file');
+            const btn = document.getElementById('d' + displayId + '-' + type + '-btn');
+            const progress = document.getElementById('d' + displayId + '-' + type + '-progress');
+            const file = fileInput.files[0];
+            if (!file) {
+                showMessage('Please select a file first', 'error');
+                return;
+            }
+            if (file.size > 1048576) {
+                showMessage('File too large (max 1MB)', 'error');
+                return;
+            }
+            btn.disabled = true;
+            btn.textContent = 'Uploading...';
+            progress.style.display = 'block';
+            progress.value = 0;
+            function doUpload(fileToUpload) {
+                const formData = new FormData();
+                formData.append('display', displayId);
+                formData.append('type', type);
+                formData.append('file', fileToUpload, file.name);
+                const xhr = new XMLHttpRequest();
+                xhr.upload.addEventListener('progress', function(e) {
+                    if (e.lengthComputable) {
+                        progress.value = (e.loaded / e.total) * 100;
+                    }
+                });
+                xhr.addEventListener('load', function() {
+                    progress.style.display = 'none';
+                    btn.disabled = false;
+                    btn.textContent = 'Upload ' + (type === 'image' ? 'Image' : 'GIF');
+                    if (xhr.status === 200) {
+                        showMessage('Upload successful!', 'success');
+                        fileInput.value = '';
+                        loadMediaInfo();
+                    } else {
+                        showMessage('Upload failed', 'error');
+                    }
+                });
+                xhr.addEventListener('error', function() {
+                    progress.style.display = 'none';
+                    btn.disabled = false;
+                    btn.textContent = 'Upload ' + (type === 'image' ? 'Image' : 'GIF');
+                    showMessage('Upload error', 'error');
+                });
+                xhr.open('POST', '/api/media/upload');
+                xhr.send(formData);
+            }
+            if (type === 'image') {
+                resizeImage(file, 240, 320, function(blob) {
+                    doUpload(blob);
+                });
+            } else {
+                doUpload(file);
+            }
+        }
+
+        function loadMediaInfo() {
+            for (let i = 0; i < 2; i++) {
+                fetch('/api/media/info?display=' + i)
+                    .then(function(res) { return res.json(); })
+                    .then(function(data) {
+                        const infoDiv = document.getElementById('d' + i + '-media-info');
+                        let html = '';
+                        if (data.image && data.image.exists) {
+                            const sizeKB = Math.round(data.image.size / 1024);
+                            html += '<div><strong>Image:</strong> ' + data.image.type.toUpperCase() + ' (' + sizeKB + ' KB)</div>';
+                            html += '<button class="delete-btn" onclick="deleteMedia(' + i + ', \'image\')">Delete Image</button>';
+                        }
+                        if (data.gif && data.gif.exists) {
+                            const sizeKB = Math.round(data.gif.size / 1024);
+                            html += '<div><strong>GIF:</strong> ' + sizeKB + ' KB</div>';
+                            html += '<button class="delete-btn" onclick="deleteMedia(' + i + ', \'gif\')">Delete GIF</button>';
+                        }
+                        if (html === '') {
+                            html = '<div style="color:#9ca3af">No media uploaded</div>';
+                        }
+                        infoDiv.innerHTML = html;
+                    });
+            }
+        }
+
+        function deleteMedia(displayId, type) {
+            if (!confirm('Delete this ' + type + '?')) return;
+            fetch('/api/media/delete?display=' + displayId + '&type=' + type, { method: 'DELETE' })
+                .then(function(res) { return res.json(); })
+                .then(function(data) {
+                    if (data.success) {
+                        showMessage('Media deleted', 'success');
+                        loadMediaInfo();
+                    } else {
+                        showMessage('Delete failed', 'error');
+                    }
+                });
+        }
+
         loadStatus();
         loadApps();
+        loadMediaInfo();
         setInterval(loadStatus, 2000);
     </script>
 </body>
 </html>
 )rawliteral";
+}
+
+void SimpleHttpServer::handleMediaInfo(AsyncWebServerRequest* request) {
+    if (!request->hasParam("display")) {
+        request->send(400, "application/json", "{\"error\":\"Missing display parameter\"}");
+        return;
+    }
+
+    uint8_t displayId = request->getParam("display")->value().toInt();
+    if (displayId > 1) {
+        request->send(400, "application/json", "{\"error\":\"Invalid display ID\"}");
+        return;
+    }
+
+    JsonDocument doc;
+
+    // Check for image (PNG or JPEG)
+    MediaInfo imageInfo = MediaService::getMediaInfo(displayId, MediaType::IMAGE_PNG);
+    if (!imageInfo.exists) {
+        imageInfo = MediaService::getMediaInfo(displayId, MediaType::IMAGE_JPEG);
+    }
+
+    if (imageInfo.exists) {
+        doc["image"]["exists"] = true;
+        doc["image"]["path"] = imageInfo.path;
+        doc["image"]["size"] = imageInfo.fileSize;
+        doc["image"]["type"] = (imageInfo.type == MediaType::IMAGE_PNG) ? "png" : "jpg";
+    } else {
+        doc["image"]["exists"] = false;
+    }
+
+    // Check for GIF
+    MediaInfo gifInfo = MediaService::getMediaInfo(displayId, MediaType::GIF);
+    if (gifInfo.exists) {
+        doc["gif"]["exists"] = true;
+        doc["gif"]["path"] = gifInfo.path;
+        doc["gif"]["size"] = gifInfo.fileSize;
+    } else {
+        doc["gif"]["exists"] = false;
+    }
+
+    String response;
+    serializeJson(doc, response);
+    request->send(200, "application/json", response);
+}
+
+void SimpleHttpServer::handleMediaDelete(AsyncWebServerRequest* request) {
+    if (!request->hasParam("display") || !request->hasParam("type")) {
+        request->send(400, "application/json", "{\"error\":\"Missing display or type parameter\"}");
+        return;
+    }
+
+    uint8_t displayId = request->getParam("display")->value().toInt();
+    String typeStr = request->getParam("type")->value();
+
+    if (displayId > 1) {
+        request->send(400, "application/json", "{\"error\":\"Invalid display ID\"}");
+        return;
+    }
+
+    MediaType type;
+    if (typeStr == "image") {
+        // Try to delete both PNG and JPEG
+        MediaService::deleteMedia(displayId, MediaType::IMAGE_PNG);
+        MediaService::deleteMedia(displayId, MediaType::IMAGE_JPEG);
+        request->send(200, "application/json", "{\"success\":true,\"message\":\"Image deleted\"}");
+        return;
+    } else if (typeStr == "gif") {
+        type = MediaType::GIF;
+    } else {
+        request->send(400, "application/json", "{\"error\":\"Invalid type (must be 'image' or 'gif')\"}");
+        return;
+    }
+
+    if (MediaService::deleteMedia(displayId, type)) {
+        request->send(200, "application/json", "{\"success\":true,\"message\":\"Media deleted\"}");
+    } else {
+        request->send(500, "application/json", "{\"error\":\"Failed to delete media\"}");
+    }
+}
+
+void SimpleHttpServer::handleMediaUpload(AsyncWebServerRequest* request,
+                                          const String& filename,
+                                          size_t index,
+                                          uint8_t* data,
+                                          size_t len,
+                                          bool final) {
+    // First chunk - initialize upload
+    if (index == 0) {
+        Serial.printf("[SimpleHTTP] Starting upload: %s\n", filename.c_str());
+
+        // Get display ID and type from request parameters
+        if (request->hasParam("display", true)) {
+            String displayParam = request->getParam("display", true)->value();
+            _uploadDisplayId = displayParam.toInt();
+            Serial.printf("[SimpleHTTP] Display parameter: '%s' -> ID: %d\n",
+                         displayParam.c_str(), _uploadDisplayId);
+        } else {
+            Serial.println("[SimpleHTTP] Error: Missing display parameter");
+            return;
+        }
+
+        if (request->hasParam("type", true)) {
+            _uploadMediaType = request->getParam("type", true)->value();
+            Serial.printf("[SimpleHTTP] Type parameter: '%s'\n", _uploadMediaType.c_str());
+        } else {
+            Serial.println("[SimpleHTTP] Error: Missing type parameter");
+            return;
+        }
+
+        // Clear upload buffer
+        _uploadBuffer.clear();
+        _uploadBuffer.reserve(MediaService::MAX_FILE_SIZE);
+    }
+
+    // Append data to buffer
+    for (size_t i = 0; i < len; i++) {
+        _uploadBuffer.push_back(data[i]);
+    }
+
+    Serial.printf("[SimpleHTTP] Upload progress: %zu bytes\n", _uploadBuffer.size());
+
+    // Final chunk - process upload
+    if (final) {
+        Serial.printf("[SimpleHTTP] Upload complete: %zu bytes total\n", _uploadBuffer.size());
+
+        // Validate size
+        if (_uploadBuffer.size() == 0) {
+            Serial.println("[SimpleHTTP] Error: Empty file");
+            return;
+        }
+
+        if (_uploadBuffer.size() > MediaService::MAX_FILE_SIZE) {
+            Serial.printf("[SimpleHTTP] Error: File too large (%zu bytes, max %zu)\n",
+                          _uploadBuffer.size(), MediaService::MAX_FILE_SIZE);
+            return;
+        }
+
+        // Detect media type
+        MediaType detectedType = MediaService::detectMediaType(_uploadBuffer.data(), _uploadBuffer.size());
+
+        // Validate type matches request
+        MediaType expectedType = MediaType::UNKNOWN;
+        if (_uploadMediaType == "image") {
+            if (detectedType != MediaType::IMAGE_PNG && detectedType != MediaType::IMAGE_JPEG) {
+                Serial.println("[SimpleHTTP] Error: Not a valid image file");
+                return;
+            }
+            expectedType = detectedType; // Use detected type (PNG or JPEG)
+        } else if (_uploadMediaType == "gif") {
+            if (detectedType != MediaType::GIF) {
+                Serial.println("[SimpleHTTP] Error: Not a valid GIF file");
+                return;
+            }
+            expectedType = MediaType::GIF;
+        }
+
+        // Save media
+        Serial.printf("[SimpleHTTP] Saving media to Display %d, type: %d\n",
+                     _uploadDisplayId, (int)expectedType);
+        if (MediaService::saveMedia(_uploadDisplayId, _uploadBuffer.data(), _uploadBuffer.size(), expectedType)) {
+            Serial.printf("[SimpleHTTP] ✓ Media saved successfully to Display %d\n", _uploadDisplayId);
+        } else {
+            Serial.printf("[SimpleHTTP] ✗ Failed to save media to Display %d\n", _uploadDisplayId);
+        }
+
+        // Clear upload buffer
+        _uploadBuffer.clear();
+    }
 }
 
 } // namespace Doki
