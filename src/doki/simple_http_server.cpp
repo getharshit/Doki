@@ -6,6 +6,7 @@
 #include "doki/simple_http_server.h"
 #include "doki/media_service.h"
 #include "doki/app_manager.h"
+#include "doki/filesystem_manager.h"
 #include <WiFi.h>
 
 namespace Doki {
@@ -58,6 +59,9 @@ bool SimpleHttpServer::begin(uint16_t port) {
                     request->send(200, "application/json", "{\"success\":true,\"message\":\"Upload complete\"}");
                 },
                 handleMediaUpload);
+
+    // API: Upload custom JavaScript code
+    _server->on("/api/upload-js", HTTP_POST, handleUploadJS);
 
     // Dashboard HTML
     _server->on("/", HTTP_GET, handleDashboard);
@@ -402,6 +406,122 @@ String SimpleHttpServer::generateDashboardHTML() {
                 </div>
             </div>
         </div>
+        <div class="upload-section">
+            <h2>⚡ Custom JavaScript</h2>
+            <p style="color: #6b7280; margin-bottom: 8px;">Write custom JavaScript code and run it on your displays. Each display has its own custom app.</p>
+
+            <div style="background: white; padding: 20px; border-radius: 8px; margin-bottom: 16px;">
+                <div style="margin-bottom: 12px; padding: 10px; background: #EFF6FF; border-left: 3px solid #3B82F6; border-radius: 4px; font-size: 14px;">
+                    <strong style="color: #1E40AF;">💡 How it works:</strong>
+                    <span style="color: #1E3A8A;"> Select a display above, load "Custom JS" app, then upload your code here. Each display has its own custom code.</span>
+                </div>
+
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                    <div>
+                        <label style="font-weight: 600; margin-right: 12px;">Upload Code to Display:</label>
+                        <select id="js-display-select" style="padding: 8px; border-radius: 6px; border: 2px solid #d1d5db; font-size: 14px;">
+                            <option value="0">Display 0</option>
+                            <option value="1">Display 1</option>
+                        </select>
+                    </div>
+                    <div style="color: #6b7280; font-size: 14px;">
+                        <span id="js-char-count">0</span> / 16384 bytes
+                    </div>
+                </div>
+
+                <div style="margin-bottom: 12px;">
+                    <textarea id="js-code-editor" style="width: 100%; height: 300px; font-family: 'Courier New', monospace; font-size: 13px; padding: 12px; border: 2px solid #d1d5db; border-radius: 6px; resize: vertical;" placeholder="Write your JavaScript code here...">// Doki OS JavaScript App - Display-only API
+// Full API Reference:
+//
+// UI: createLabel(t,x,y) -> ID, updateLabel(id,t),
+//     setLabelColor(id,hex), setLabelSize(id,size),
+//     clearScreen(), setBackgroundColor(hex)
+//
+// Draw: drawRectangle(x,y,w,h,color), drawCircle(x,y,r,color)
+//
+// Advanced: createScrollingLabel(t,x,y,w) -> ID,
+//           setTextAlign(id,0|1|2)
+//
+// Screen: getWidth(), getHeight(), getDisplayId()
+//
+// Time: millis()
+//
+// HTTP: httpGet(url) -> text|null
+//
+// JSON: JSON.parse(str), JSON.stringify(obj)
+//
+// State: saveState(k,v), loadState(k)
+
+var clockLabel;
+
+function onCreate() {
+    log("Custom app started on display " + getDisplayId());
+    clearScreen();
+    setBackgroundColor(0x0f172a);
+
+    // Title
+    var titleId = createLabel("Live Clock", 70, 40);
+    setLabelColor(titleId, 0x60a5fa);
+    setLabelSize(titleId, 20);
+
+    // Clock (will update every second)
+    clockLabel = createLabel("00:00:00", 60, 100);
+    setLabelSize(clockLabel, 24);
+    setLabelColor(clockLabel, 0x10b981);
+
+    // Decorative elements
+    drawCircle(120, 160, 80, 0x1e3a8a);
+    drawRectangle(40, 220, 160, 60, 0x312e81);
+
+    var infoId = createLabel("Uptime", 90, 235);
+    setLabelColor(infoId, 0x94a3b8);
+}
+
+var lastUpdate = 0;
+
+function onUpdate() {
+    // Update clock every second
+    var now = millis();
+    if (now - lastUpdate > 1000) {
+        var seconds = Math.floor((now / 1000) % 60);
+        var minutes = Math.floor((now / 60000) % 60);
+        var hours = Math.floor((now / 3600000) % 24);
+
+        var timeStr =
+            (hours < 10 ? "0" : "") + hours + ":" +
+            (minutes < 10 ? "0" : "") + minutes + ":" +
+            (seconds < 10 ? "0" : "") + seconds;
+
+        updateLabel(clockLabel, timeStr);
+        lastUpdate = now;
+    }
+}
+
+function onDestroy() {
+    log("App closed");
+}</textarea>
+                </div>
+
+                <div style="display: flex; gap: 12px;">
+                    <button onclick="uploadAndLoadJS()" style="flex: 1; padding: 14px; background: #10b981; color: white; border: none; border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 15px;">
+                        📤 Upload & Load on Display
+                    </button>
+                    <button onclick="clearJSEditor()" style="padding: 14px 24px; background: #6b7280; color: white; border: none; border-radius: 6px; cursor: pointer;">
+                        Clear
+                    </button>
+                </div>
+
+                <div style="margin-top: 16px; padding: 12px; background: #f3f4f6; border-radius: 6px; font-size: 13px; color: #4b5563;">
+                    <strong>💡 Tips:</strong>
+                    <ul style="margin: 8px 0 0 20px;">
+                        <li>Use <code>onCreate()</code> to initialize your app</li>
+                        <li>Use <code>onUpdate()</code> for periodic updates</li>
+                        <li>Coordinates: x (0-240), y (0-320)</li>
+                        <li>Colors in hex: 0xFF0000 (red), 0x00FF00 (green), 0x0000FF (blue)</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
     </div>
     <script>
         let selectedDisplay = 0;
@@ -635,6 +755,69 @@ String SimpleHttpServer::generateDashboardHTML() {
                 });
         }
 
+        // Custom JavaScript editor functions
+        const jsEditor = document.getElementById('js-code-editor');
+        const jsCharCount = document.getElementById('js-char-count');
+        const jsDisplaySelect = document.getElementById('js-display-select');
+
+        // Update character count
+        jsEditor.addEventListener('input', function() {
+            jsCharCount.textContent = jsEditor.value.length;
+        });
+        jsCharCount.textContent = jsEditor.value.length;
+
+        function uploadAndLoadJS() {
+            const code = jsEditor.value;
+            const displayId = jsDisplaySelect.value;
+
+            if (code.trim() === '') {
+                showMessage('Code is empty', 'error');
+                return;
+            }
+
+            if (code.length > 16384) {
+                showMessage('Code is too large (max 16KB)', 'error');
+                return;
+            }
+
+            showMessage('Uploading custom JS...', 'info');
+
+            // Upload JS code
+            const formData = new FormData();
+            formData.append('display', displayId);
+            formData.append('code', code);
+
+            fetch('/api/upload-js', {
+                method: 'POST',
+                body: formData
+            })
+            .then(function(res) { return res.json(); })
+            .then(function(data) {
+                if (data.success) {
+                    let message = '✓ Code uploaded to Display ' + displayId + ' (' + data.size + ' bytes).';
+                    if (data.reloaded) {
+                        message += ' App reloaded with new code!';
+                    } else {
+                        message += ' Load "Custom JS" app to run it.';
+                    }
+                    showMessage(message, 'success');
+                    loadStatus();
+                } else {
+                    throw new Error(data.error || 'Upload failed');
+                }
+            })
+            .catch(function(err) {
+                showMessage('✗ Error: ' + err.message, 'error');
+            });
+        }
+
+        function clearJSEditor() {
+            if (confirm('Clear the editor?')) {
+                jsEditor.value = '';
+                jsCharCount.textContent = '0';
+            }
+        }
+
         loadStatus();
         loadApps();
         loadMediaInfo();
@@ -722,6 +905,72 @@ void SimpleHttpServer::handleMediaDelete(AsyncWebServerRequest* request) {
     } else {
         request->send(500, "application/json", "{\"error\":\"Failed to delete media\"}");
     }
+}
+
+void SimpleHttpServer::handleUploadJS(AsyncWebServerRequest* request) {
+    // Check for required parameters
+    if (!request->hasParam("display", true) || !request->hasParam("code", true)) {
+        request->send(400, "application/json", "{\"error\":\"Missing display or code parameter\"}");
+        return;
+    }
+
+    uint8_t displayId = request->getParam("display", true)->value().toInt();
+    String code = request->getParam("code", true)->value();
+
+    if (displayId > 1) {
+        request->send(400, "application/json", "{\"error\":\"Invalid display ID (must be 0 or 1)\"}");
+        return;
+    }
+
+    // Check code size (limit to 16KB for safety)
+    const size_t MAX_CODE_SIZE = 16 * 1024;
+    if (code.length() > MAX_CODE_SIZE) {
+        request->send(400, "application/json", "{\"error\":\"Code too large (max 16KB)\"}");
+        return;
+    }
+
+    if (code.isEmpty()) {
+        request->send(400, "application/json", "{\"error\":\"Empty code\"}");
+        return;
+    }
+
+    // Create /js directory if it doesn't exist
+    if (!FilesystemManager::exists("/js")) {
+        FilesystemManager::createDir("/js");
+    }
+
+    // Save to SPIFFS
+    char filepath[32];
+    snprintf(filepath, sizeof(filepath), "/js/custom_disp%d.js", displayId);
+
+    // Write file using FilesystemManager API
+    bool success = FilesystemManager::writeFile(filepath, (const uint8_t*)code.c_str(), code.length());
+    if (!success) {
+        request->send(500, "application/json", "{\"error\":\"Failed to write file\"}");
+        return;
+    }
+
+    size_t written = code.length();
+
+    Serial.printf("[SimpleHTTP] ✓ Saved custom JS for display %d (%d bytes)\n", displayId, written);
+
+    // Check if Custom JS app is currently running on this display
+    const char* currentAppId = AppManager::getAppId(displayId);
+    bool needsReload = false;
+    if (currentAppId && strcmp(currentAppId, "custom") == 0) {
+        // Reload the app to pick up the new code
+        Serial.printf("[SimpleHTTP] Reloading Custom JS app on display %d\n", displayId);
+        if (AppManager::unloadApp(displayId) && AppManager::loadApp(displayId, "custom")) {
+            Serial.printf("[SimpleHTTP] ✓ Custom JS app reloaded on display %d\n", displayId);
+            needsReload = true;
+        } else {
+            Serial.printf("[SimpleHTTP] ⚠️ Failed to reload app on display %d\n", displayId);
+        }
+    }
+
+    // Send success response
+    String response = "{\"success\":true,\"size\":" + String(written) + ",\"path\":\"" + filepath + "\",\"reloaded\":" + (needsReload ? "true" : "false") + "}";
+    request->send(200, "application/json", response);
 }
 
 void SimpleHttpServer::handleMediaUpload(AsyncWebServerRequest* request,

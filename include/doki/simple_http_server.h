@@ -63,6 +63,7 @@ private:
     static void handleDashboard(AsyncWebServerRequest* request);
     static void handleMediaInfo(AsyncWebServerRequest* request);
     static void handleMediaDelete(AsyncWebServerRequest* request);
+    static void handleUploadJS(AsyncWebServerRequest* request);
     static void handleMediaUpload(AsyncWebServerRequest* request,
                                   const String& filename,
                                   size_t index,

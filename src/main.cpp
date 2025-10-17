@@ -26,6 +26,8 @@
 #include "doki/lvgl_fs_driver.h"
 #include "doki/state_persistence.h"
 #include "doki/lvgl_manager.h"
+#include "doki/js_engine.h"
+#include "doki/js_app.h"
 
 // Import apps
 #include "apps/clock_app/clock_app.h"
@@ -36,6 +38,7 @@
 #include "apps/blank_app/blank_app.h"
 #include "apps/image_preview/image_preview.h"
 #include "apps/gif_player/gif_player.h"
+#include "apps/custom_js/custom_js_app.h"
 
 // ========================================
 // Hardware Configuration
@@ -495,14 +498,20 @@ void setup() {
     delay(2000);
 
     // Step 3.5: Initialize StatePersistence
-    Serial.println("\n[Main] Step 3.5/7: Initializing StatePersistence...");
+    Serial.println("\n[Main] Step 3.5/8: Initializing StatePersistence...");
     if (!Doki::StatePersistence::init()) {
         Serial.println("[Main] ✗ StatePersistence initialization failed!");
         while (1) delay(1000);
     }
 
-    // Step 3.6: Initialize AppManager
-    Serial.println("\n[Main] Step 3.6/7: Initializing AppManager...");
+    // Step 3.6: Initialize JavaScript Engine
+    Serial.println("\n[Main] Step 3.6/8: Initializing JavaScript Engine...");
+    if (!Doki::JSEngine::init()) {
+        Serial.println("[Main] ⚠️  JavaScript support not available (continuing without it)");
+    }
+
+    // Step 3.7: Initialize AppManager
+    Serial.println("\n[Main] Step 3.7/8: Initializing AppManager...");
     lv_disp_t* displayHandles[DISPLAY_COUNT];
     for (uint8_t i = 0; i < DISPLAY_COUNT; i++) {
         displayHandles[i] = displays[i].disp;
@@ -522,6 +531,23 @@ void setup() {
     Doki::AppManager::registerApp("blank", "Blank", []() -> Doki::DokiApp* { return new BlankApp(); }, "Blank screen");
     Doki::AppManager::registerApp("image", "Image Viewer", []() -> Doki::DokiApp* { return new ImagePreviewApp(); }, "Display images");
     Doki::AppManager::registerApp("gif", "GIF Player", []() -> Doki::DokiApp* { return new GifPlayerApp(); }, "Play animated GIFs");
+
+    // Custom JavaScript app (loads code based on which display it's running on)
+    Doki::AppManager::registerApp("custom", "Custom JS", []() -> Doki::DokiApp* { return new CustomJSApp(); }, "User-programmable JavaScript app");
+
+    // Advanced Demo - Showcases all JavaScript features (animations, MQTT, WebSocket, HTTP, multi-display)
+    Doki::AppManager::registerApp("advanced_demo", "Advanced Demo",
+        []() -> Doki::DokiApp* {
+            return new Doki::JSApp("advanced_demo", "Advanced Demo", "/apps/advanced_demo.js");
+        },
+        "Comprehensive demo of animations, MQTT, WebSocket, and multi-display features");
+
+    // WebSocket Test - Diagnostic app for WebSocket connectivity testing
+    Doki::AppManager::registerApp("websocket_test", "WebSocket Test",
+        []() -> Doki::DokiApp* {
+            return new Doki::JSApp("websocket_test", "WebSocket Test", "/apps/websocket_test.js");
+        },
+        "WebSocket diagnostic and testing tool");
 
     Doki::AppManager::printStatus();
 

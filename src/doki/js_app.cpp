@@ -43,6 +43,9 @@ void JSApp::onCreate() {
         return;
     }
 
+    // Set the display ID for this context
+    JSEngine::setDisplayId(_jsContext, getDisplayId());
+
     // Load and execute the script
     if (!JSEngine::loadScript(_jsContext, _scriptPath.c_str())) {
         String error = "Script error:\n" + String(JSEngine::getLastError());

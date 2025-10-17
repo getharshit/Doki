@@ -65,7 +65,7 @@ public:
     void onSaveState(JsonDocument& state) override;
     void onRestoreState(const JsonDocument& state) override;
 
-private:
+protected:
     String _scriptPath;          ///< Path to JS file
     void* _jsContext;            ///< Duktape context
     bool _scriptLoaded;          ///< Script loaded successfully
