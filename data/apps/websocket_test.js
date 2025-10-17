@@ -22,9 +22,12 @@ var testCountLabel = null;
 
 // State
 var wsConnected = false;
-var testServer = "wss://echo.websocket.org";
-var alternateServer = "ws://echo.websocket.events";
-var currentServer = testServer;
+var testServers = [
+    "wss://echo.websocket.org/",            // Secure WebSocket (wss://) on port 443
+    "ws://ws.postman-echo.com/raw"          // Fallback non-secure server
+];
+var currentServerIndex = 0;
+var currentServer = testServers[0];
 var connectionAttempts = 0;
 var messagesReceived = 0;
 var messagesSent = 0;
@@ -44,17 +47,17 @@ var maxLogMessages = 5;
 // ============================================================================
 
 function onCreate() {
-    log("WebSocket Diagnostics App Created");
+    logMessage("WebSocket Diagnostics App Created");
     setupUI();
 }
 
 function onStart() {
-    log("WebSocket Diagnostics Started");
+    logMessage("WebSocket Diagnostics Started");
     testStartTime = millis();
 
     // Start automatic testing sequence
     if (autoTestEnabled) {
-        log("Starting automatic test sequence...");
+        logMessage("Starting automatic test sequence...");
     }
 }
 
@@ -81,11 +84,18 @@ function onUpdate() {
             sendTestMessage("Hello from Doki OS!");
         }
         else if (testPhase === 1 && !wsConnected && elapsed > 10000) {
-            // Phase 1: If not connected after 10s, try alternate server
-            testPhase = 3;
-            log("First server failed, trying alternate...");
-            currentServer = alternateServer;
-            attemptConnection(currentServer);
+            // Phase 1: If not connected after 10s, try next server
+            currentServerIndex++;
+            if (currentServerIndex < testServers.length) {
+                testPhase = 3;
+                currentServer = testServers[currentServerIndex];
+                logMessage("Trying server " + (currentServerIndex + 1) + "...");
+                attemptConnection(currentServer);
+            } else {
+                testPhase = 5;
+                logMessage("All servers failed");
+                autoTestEnabled = false;
+            }
         }
         else if (testPhase === 2 && elapsed > 8000) {
             // Phase 2: Send another test after 8s
@@ -93,14 +103,27 @@ function onUpdate() {
             sendTestMessage("Test message #2");
         }
         else if (testPhase === 3 && wsConnected && elapsed > 15000) {
-            // Phase 3: Alternate server connected, send test
+            // Phase 3: Server connected, send test
             testPhase = 4;
-            sendTestMessage("Connected to alternate server");
+            sendTestMessage("Connected to server!");
+        }
+        else if (testPhase === 3 && !wsConnected && elapsed > 20000) {
+            // Phase 3: Current server failed, try next
+            currentServerIndex++;
+            if (currentServerIndex < testServers.length) {
+                currentServer = testServers[currentServerIndex];
+                logMessage("Trying server " + (currentServerIndex + 1) + "...");
+                attemptConnection(currentServer);
+            } else {
+                testPhase = 5;
+                logMessage("All servers failed");
+                autoTestEnabled = false;
+            }
         }
         else if (testPhase === 4 && elapsed > 20000) {
             // Phase 4: Test complete, just maintain connection
             testPhase = 5;
-            log("Automatic testing complete");
+            logMessage("Automatic testing complete");
             autoTestEnabled = false;
         }
     }
@@ -110,11 +133,11 @@ function onUpdate() {
 }
 
 function onPause() {
-    log("WebSocket Diagnostics Paused");
+    logMessage("WebSocket Diagnostics Paused");
 }
 
 function onDestroy() {
-    log("WebSocket Diagnostics Destroyed");
+    logMessage("WebSocket Diagnostics Destroyed");
     if (wsConnected) {
         wsDisconnect();
     }
@@ -129,7 +152,7 @@ function onSaveState() {
 }
 
 function onRestoreState(state) {
-    log("State restored");
+    logMessage("State restored");
 }
 
 // ============================================================================
@@ -210,7 +233,7 @@ function setupUI() {
     drawCircle(220, 15, 5, 0x60a5fa);
     drawCircle(15, 15, 3, 0xa78bfa);
 
-    log("UI initialized");
+    logMessage("UI initialized");
 }
 
 // ============================================================================
@@ -219,7 +242,7 @@ function setupUI() {
 
 function attemptConnection(url) {
     connectionAttempts++;
-    log("Connecting to: " + url);
+    logMessage("Connecting to: " + url);
 
     updateStatus("Connecting...", 0xfbbf24);
     updateServer(url);
@@ -228,33 +251,33 @@ function attemptConnection(url) {
 
     if (success) {
         wsConnected = true;
-        log("✓ Connected successfully!");
+        logMessage("✓ Connected successfully!");
         updateStatus("Connected", 0x10b981);
 
         // Setup message handler
         wsOnMessage(function(msg) {
             messagesReceived++;
-            log("← Received: " + msg);
+            logMessage("← Received: " + msg);
         });
     } else {
         wsConnected = false;
-        log("✗ Connection failed");
+        logMessage("✗ Connection failed");
         updateStatus("Failed", 0xef4444);
     }
 }
 
 function sendTestMessage(message) {
     if (!wsConnected) {
-        log("✗ Cannot send - not connected");
+        logMessage("✗ Cannot send - not connected");
         return;
     }
 
     messagesSent++;
-    log("→ Sending: " + message);
+    logMessage("→ Sending: " + message);
 
     var success = wsSend(message);
     if (!success) {
-        log("✗ Send failed");
+        logMessage("✗ Send failed");
     }
 }
 
@@ -262,7 +285,7 @@ function disconnectWebSocket() {
     if (wsConnected) {
         wsDisconnect();
         wsConnected = false;
-        log("Disconnected");
+        logMessage("Disconnected");
         updateStatus("Disconnected", 0x64748b);
     }
 }
@@ -315,9 +338,9 @@ function refreshLog() {
 // LOGGING
 // ============================================================================
 
-function log(message) {
-    // Add to serial
-    print("[WebSocket Test] " + message);
+function logMessage(message) {
+    // Add to serial (using 'log' function from Doki OS)
+    log("[WebSocket Test] " + message);
 
     // Add timestamp
     var timestamp = "[" + Math.floor(millis() / 1000) + "s]";
@@ -344,4 +367,4 @@ function log(message) {
 // END
 // ============================================================================
 
-log("WebSocket diagnostic app loaded");
+logMessage("WebSocket diagnostic app loaded");

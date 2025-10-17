@@ -98,6 +98,11 @@ bool WiFiManager::connectToWiFi(const String& ssid,
     WiFi.mode(WIFI_STA);
     delay(100);
 
+    // Configure DNS servers (Google DNS for reliable resolution)
+    IPAddress primaryDNS(8, 8, 8, 8);      // Google DNS
+    IPAddress secondaryDNS(8, 8, 4, 4);    // Google DNS secondary
+    WiFi.config(INADDR_NONE, INADDR_NONE, INADDR_NONE, primaryDNS, secondaryDNS);
+
     // Start connection
     _status = WiFiStatus::CONNECTING;
     WiFi.begin(ssid.c_str(), password.c_str());
@@ -107,6 +112,7 @@ bool WiFiManager::connectToWiFi(const String& ssid,
         _status = WiFiStatus::CONNECTED;
         Serial.println("[WiFiManager] ✓ Connected to WiFi!");
         Serial.printf("[WiFiManager] IP Address: %s\n", WiFi.localIP().toString().c_str());
+        Serial.printf("[WiFiManager] DNS Server: %s\n", WiFi.dnsIP().toString().c_str());
         Serial.printf("[WiFiManager] Signal: %d dBm\n", WiFi.RSSI());
         return true;
     }

@@ -63,7 +63,7 @@ var MQTT_PORT = 1883;
 var MQTT_TOPIC = "doki/demo/#";
 var WEATHER_API_KEY = "3183db8ec2fe4abfa2c133226251310";
 var WEATHER_LOCATION = "Mumbai";
-var WS_URL = "ws://echo.websocket.org";
+var WS_URL = "wss://echo.websocket.org/";
 
 // ============================================================================
 // LIFECYCLE METHODS

@@ -16,7 +16,7 @@
 // WebSocket support - enabled for diagnostic testing
 #define ENABLE_WEBSOCKET_SUPPORT
 #ifdef ENABLE_WEBSOCKET_SUPPORT
-    #include <ArduinoWebsockets.h>
+    #include <WebSocketsClient.h>
 #endif
 
 namespace Doki {
@@ -1224,36 +1224,59 @@ duk_ret_t JSEngine::_js_mqttDisconnect(duk_context* ctx) {
 }
 
 // ========================================
-// Advanced Features: WebSocket Support
+// Advanced Features: WebSocket Support (Links2004 Library)
 // ========================================
 
 #ifdef ENABLE_WEBSOCKET_SUPPORT
-using namespace websockets;
-
-static WebsocketsClient* wsClient = nullptr;
+static WebSocketsClient* wsClient = nullptr;
 static duk_context* wsDukContext = nullptr;
+static bool wsConnected = false;
 
-static void wsMessageCallback(WebsocketsMessage message) {
-    if (!wsDukContext) return;
+// Links2004 library uses event-driven callbacks
+static void wsEventCallback(WStype_t type, uint8_t* payload, size_t length) {
+    switch(type) {
+        case WStype_DISCONNECTED:
+            Serial.println("[WebSocket] Disconnected");
+            wsConnected = false;
+            break;
 
-    Serial.printf("[WebSocket] Message: %s\n", message.data().c_str());
+        case WStype_CONNECTED:
+            Serial.printf("[WebSocket] Connected to: %s\n", payload);
+            wsConnected = true;
+            break;
 
-    // Store message in stash
-    duk_push_global_stash(wsDukContext);
-    duk_get_prop_string(wsDukContext, -1, "__ws_messages");
+        case WStype_TEXT:
+            Serial.printf("[WebSocket] Message received: %s\n", payload);
 
-    if (!duk_is_array(wsDukContext, -1)) {
-        duk_pop(wsDukContext);
-        duk_push_array(wsDukContext);
-        duk_dup(wsDukContext, -1);
-        duk_put_prop_string(wsDukContext, -3, "__ws_messages");
+            // Store message in Duktape stash
+            if (wsDukContext) {
+                duk_push_global_stash(wsDukContext);
+                duk_get_prop_string(wsDukContext, -1, "__ws_messages");
+
+                if (!duk_is_array(wsDukContext, -1)) {
+                    duk_pop(wsDukContext);
+                    duk_push_array(wsDukContext);
+                    duk_dup(wsDukContext, -1);
+                    duk_put_prop_string(wsDukContext, -3, "__ws_messages");
+                }
+
+                duk_idx_t arrIdx = duk_get_length(wsDukContext, -1);
+                duk_push_string(wsDukContext, (char*)payload);
+                duk_put_prop_index(wsDukContext, -2, arrIdx);
+
+                duk_pop_2(wsDukContext);  // pop array and stash
+            }
+            break;
+
+        case WStype_ERROR:
+            Serial.printf("[WebSocket] Error: %s\n", payload);
+            wsConnected = false;
+            break;
+
+        default:
+            Serial.printf("[WebSocket] Event type: %d\n", type);
+            break;
     }
-
-    duk_idx_t arrIdx = duk_get_length(wsDukContext, -1);
-    duk_push_string(wsDukContext, message.data().c_str());
-    duk_put_prop_index(wsDukContext, -2, arrIdx);
-
-    duk_pop_2(wsDukContext);  // pop array and stash
 }
 #endif
 
@@ -1261,21 +1284,92 @@ duk_ret_t JSEngine::_js_wsConnect(duk_context* ctx) {
 #ifdef ENABLE_WEBSOCKET_SUPPORT
     const char* url = duk_to_string(ctx, 0);
 
+    Serial.println("========== WebSocket Connect (Links2004) ==========");
+    Serial.printf("[WS] JavaScript called wsConnect('%s')\n", url);
+    Serial.printf("[WS] Free heap: %d bytes\n", ESP.getFreeHeap());
+
+    // Parse URL (format: ws://host:port/path or wss://host:port/path)
+    String urlStr = String(url);
+    String host;
+    uint16_t port = 80;
+    String path = "/";
+    bool useSSL = false;
+
+    // Remove ws:// or wss:// prefix
+    if (urlStr.startsWith("ws://")) {
+        urlStr = urlStr.substring(5);
+        useSSL = false;
+        port = 80;  // Default port for ws://
+    } else if (urlStr.startsWith("wss://")) {
+        urlStr = urlStr.substring(6);
+        useSSL = true;
+        port = 443;  // Default port for wss://
+    }
+
+    // Parse host:port/path
+    int slashPos = urlStr.indexOf('/');
+    String hostPort;
+    if (slashPos != -1) {
+        hostPort = urlStr.substring(0, slashPos);
+        path = urlStr.substring(slashPos);
+    } else {
+        hostPort = urlStr;
+    }
+
+    int colonPos = hostPort.indexOf(':');
+    if (colonPos != -1) {
+        host = hostPort.substring(0, colonPos);
+        port = hostPort.substring(colonPos + 1).toInt();
+    } else {
+        host = hostPort;
+    }
+
+    Serial.printf("[WS] Parsed - Host: %s, Port: %d, Path: %s, SSL: %s\n",
+        host.c_str(), port, path.c_str(), useSSL ? "yes" : "no");
+
+    // Create client if needed
     if (!wsClient) {
-        wsClient = new WebsocketsClient();
+        Serial.println("[WS] Creating new WebSocketsClient...");
+        wsClient = new WebSocketsClient();
+        Serial.printf("[WS] Client created at: %p\n", (void*)wsClient);
+    } else {
+        Serial.println("[WS] Disconnecting existing connection...");
+        wsClient->disconnect();
     }
 
     wsDukContext = ctx;
-    wsClient->onMessage(wsMessageCallback);
 
-    bool connected = wsClient->connect(url);
+    // Set up event handler
+    Serial.println("[WS] Setting up event callback...");
+    wsClient->onEvent(wsEventCallback);
 
-    Serial.printf("[WebSocket] Connect to %s: %s\n", url, connected ? "OK" : "FAILED");
+    // Connect using Links2004 API (beginSSL for wss://, begin for ws://)
+    if (useSSL) {
+        Serial.printf("[WS] Calling beginSSL(%s, %d, %s) for secure connection...\n",
+            host.c_str(), port, path.c_str());
+        wsClient->beginSSL(host.c_str(), port, path.c_str());
+    } else {
+        Serial.printf("[WS] Calling begin(%s, %d, %s) for plain connection...\n",
+            host.c_str(), port, path.c_str());
+        wsClient->begin(host.c_str(), port, path.c_str());
+    }
 
-    duk_push_boolean(ctx, connected);
+    // Wait a moment for connection
+    Serial.println("[WS] Waiting for connection (2 sec)...");
+    unsigned long startTime = millis();
+    while (millis() - startTime < 2000) {
+        wsClient->loop();
+        delay(50);
+        if (wsConnected) break;
+    }
+
+    Serial.printf("[WS] Connection result: %s\n", wsConnected ? "SUCCESS" : "FAILED");
+    Serial.println("=================================================");
+
+    duk_push_boolean(ctx, wsConnected);
     return 1;
 #else
-    Serial.println("[WebSocket] Not supported - enable ENABLE_WEBSOCKET_SUPPORT in js_engine.cpp");
+    Serial.println("[WebSocket] Not supported - enable ENABLE_WEBSOCKET_SUPPORT");
     duk_push_boolean(ctx, false);
     return 1;
 #endif
@@ -1285,18 +1379,18 @@ duk_ret_t JSEngine::_js_wsSend(duk_context* ctx) {
 #ifdef ENABLE_WEBSOCKET_SUPPORT
     const char* message = duk_to_string(ctx, 0);
 
-    if (!wsClient || !wsClient->available()) {
+    if (!wsClient || !wsConnected) {
         Serial.println("[WebSocket] Not connected");
         duk_push_boolean(ctx, false);
         return 1;
     }
 
-    wsClient->poll();  // Process events
-    wsClient->send(message);
+    // Links2004 library: sendTXT() for text messages
+    bool success = wsClient->sendTXT(message);
 
-    Serial.printf("[WebSocket] Sent: %s\n", message);
+    Serial.printf("[WebSocket] Sent (%s): %s\n", success ? "OK" : "FAILED", message);
 
-    duk_push_boolean(ctx, true);
+    duk_push_boolean(ctx, success);
     return 1;
 #else
     duk_push_boolean(ctx, false);
@@ -1306,12 +1400,11 @@ duk_ret_t JSEngine::_js_wsSend(duk_context* ctx) {
 
 duk_ret_t JSEngine::_js_wsOnMessage(duk_context* ctx) {
 #ifdef ENABLE_WEBSOCKET_SUPPORT
-    // This is handled by the callback system
-    // JavaScript polls messages from stash array
+    // Links2004 library: Must call loop() to process events
+    // This triggers the event callback which stores messages in stash
     if (wsClient) {
-        wsClient->poll();  // Process pending messages
+        wsClient->loop();
     }
-    Serial.println("[WebSocket] Polling for messages");
 #endif
     return 0;
 }
@@ -1319,9 +1412,10 @@ duk_ret_t JSEngine::_js_wsOnMessage(duk_context* ctx) {
 duk_ret_t JSEngine::_js_wsDisconnect(duk_context* ctx) {
 #ifdef ENABLE_WEBSOCKET_SUPPORT
     if (wsClient) {
-        wsClient->close();
+        wsClient->disconnect();
         delete wsClient;
         wsClient = nullptr;
+        wsConnected = false;
         Serial.println("[WebSocket] Disconnected");
     }
 #endif

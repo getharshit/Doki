@@ -29,6 +29,12 @@
 #include "doki/js_engine.h"
 #include "doki/js_app.h"
 
+// WebSocket support (if enabled)
+#define ENABLE_WEBSOCKET_SUPPORT  // Enable for C++ test
+#ifdef ENABLE_WEBSOCKET_SUPPORT
+    #include <WebSocketsClient.h>
+#endif
+
 // Import apps
 #include "apps/clock_app/clock_app.h"
 #include "apps/weather_app/weather_app.h"
@@ -572,6 +578,233 @@ void setup() {
         enterSetupMode();
     } else {
         Serial.printf("[Main] ✓ Connected to WiFi: %s\n", WiFi.localIP().toString().c_str());
+
+        // ========== TCP CLIENT TEST (DIAGNOSTIC) ==========
+        Serial.println("\n========== TCP Client Test ==========");
+        Serial.println("[TCP Test] Testing basic WiFiClient (same class WebSocket uses)");
+        Serial.printf("[TCP Test] Free heap: %d bytes\n", ESP.getFreeHeap());
+
+        WiFiClient tcpClient;
+        const char* testHost = "echo.websocket.org";
+        const uint16_t testPort = 80;
+
+        Serial.printf("[TCP Test] Connecting to %s:%d...\n", testHost, testPort);
+
+        unsigned long tcpStartTime = millis();
+        bool tcpConnected = tcpClient.connect(testHost, testPort);
+        unsigned long tcpConnectTime = millis() - tcpStartTime;
+
+        Serial.printf("[TCP Test] Connection attempt took %lu ms\n", tcpConnectTime);
+        Serial.printf("[TCP Test] Result: %s\n", tcpConnected ? "SUCCESS" : "FAILED");
+
+        if (tcpConnected) {
+            Serial.println("[TCP Test] ✓ TCP connection successful!");
+            Serial.printf("[TCP Test] Connected to: %s\n", tcpClient.remoteIP().toString().c_str());
+            Serial.printf("[TCP Test] Local port: %d\n", tcpClient.localPort());
+
+            // Send simple HTTP request
+            Serial.println("[TCP Test] Sending HTTP GET request...");
+            tcpClient.println("GET / HTTP/1.1");
+            tcpClient.println("Host: echo.websocket.org");
+            tcpClient.println("Connection: close");
+            tcpClient.println();
+
+            // Wait for response
+            Serial.println("[TCP Test] Waiting for response...");
+            unsigned long responseStart = millis();
+            while (!tcpClient.available() && millis() - responseStart < 5000) {
+                delay(10);
+            }
+
+            if (tcpClient.available()) {
+                Serial.println("[TCP Test] ✓ Response received:");
+                String line = tcpClient.readStringUntil('\n');
+                Serial.printf("[TCP Test]   %s\n", line.c_str());
+            } else {
+                Serial.println("[TCP Test] ✗ No response received");
+            }
+
+            tcpClient.stop();
+            Serial.println("[TCP Test] Connection closed");
+
+            Serial.println("\n[TCP Test] ✓ VERDICT: WiFiClient TCP works perfectly!");
+            Serial.println("[TCP Test] → Issue must be in WebSocket library layer");
+        } else {
+            Serial.println("\n[TCP Test] ✗ VERDICT: Basic TCP connection FAILED!");
+            Serial.println("[TCP Test] → This explains why WebSocket fails");
+            Serial.printf("[TCP Test] → WiFi status: %d\n", WiFi.status());
+            Serial.printf("[TCP Test] → DNS IP: %s\n", WiFi.dnsIP().toString().c_str());
+        }
+        Serial.println("==========================================\n");
+        // ========== END TCP TEST ==========
+
+        // ========== MANUAL WEBSOCKET HANDSHAKE TEST ==========
+        Serial.println("\n========== Manual WebSocket Handshake Test ==========");
+        Serial.println("[WS Manual] Attempting WebSocket handshake without library");
+
+        WiFiClient wsManualClient;
+        Serial.printf("[WS Manual] Connecting to %s:%d...\n", testHost, testPort);
+
+        if (wsManualClient.connect(testHost, testPort)) {
+            Serial.println("[WS Manual] ✓ TCP connected");
+
+            // Send WebSocket upgrade request
+            Serial.println("[WS Manual] Sending WebSocket upgrade request...");
+            wsManualClient.print("GET / HTTP/1.1\r\n");
+            wsManualClient.print("Host: echo.websocket.org\r\n");
+            wsManualClient.print("Upgrade: websocket\r\n");
+            wsManualClient.print("Connection: Upgrade\r\n");
+            wsManualClient.print("Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n");
+            wsManualClient.print("Sec-WebSocket-Version: 13\r\n");
+            wsManualClient.print("\r\n");
+
+            // Wait for response
+            Serial.println("[WS Manual] Waiting for upgrade response...");
+            unsigned long wsResponseStart = millis();
+            while (!wsManualClient.available() && millis() - wsResponseStart < 5000) {
+                delay(10);
+            }
+
+            if (wsManualClient.available()) {
+                Serial.println("[WS Manual] ✓ Response received:");
+                while (wsManualClient.available()) {
+                    String line = wsManualClient.readStringUntil('\n');
+                    Serial.printf("[WS Manual]   %s\n", line.c_str());
+                    if (line.length() <= 1) break;  // Empty line = end of headers
+                }
+
+                Serial.println("\n[WS Manual] ✓ VERDICT: WebSocket handshake works manually!");
+                Serial.println("[WS Manual] → The WebSocket PROTOCOL works fine");
+                Serial.println("[WS Manual] → Problem is in the Links2004 library implementation");
+            } else {
+                Serial.println("[WS Manual] ✗ No response to upgrade request");
+            }
+
+            wsManualClient.stop();
+        } else {
+            Serial.println("[WS Manual] ✗ TCP connection failed");
+        }
+        Serial.println("=================================================\n");
+        // ========== END MANUAL WEBSOCKET TEST ==========
+
+        // ========== WEBSOCKET C++ DIRECT TEST ==========
+        Serial.println("\n========== WebSocket C++ Direct Test (Links2004 Library) ==========");
+        #ifdef ENABLE_WEBSOCKET_SUPPORT
+            Serial.println("[WS C++ Test] WebSocket support is ENABLED (Links2004)");
+            Serial.printf("[WS C++ Test] Free heap before test: %d bytes\n", ESP.getFreeHeap());
+
+            Serial.println("[WS C++ Test] Creating WebSocket client...");
+            WebSocketsClient* testWsClient = new WebSocketsClient();
+            Serial.printf("[WS C++ Test] Client created at: %p\n", (void*)testWsClient);
+            Serial.printf("[WS C++ Test] Free heap after creation: %d bytes\n", ESP.getFreeHeap());
+
+            // Links2004 library uses event callbacks
+            Serial.println("[WS C++ Test] Setting up event handler...");
+            testWsClient->onEvent([](WStype_t type, uint8_t* payload, size_t length) {
+                switch(type) {
+                    case WStype_DISCONNECTED:
+                        Serial.println("[WS C++ Test] Disconnected");
+                        break;
+                    case WStype_CONNECTED:
+                        Serial.printf("[WS C++ Test] ✓✓✓ CONNECTED to: %s\n", payload);
+                        break;
+                    case WStype_TEXT:
+                        Serial.printf("[WS C++ Test] ✓✓✓ MESSAGE RECEIVED: %s\n", payload);
+                        break;
+                    case WStype_ERROR:
+                        Serial.printf("[WS C++ Test] ✗ Error: %s\n", payload);
+                        break;
+                    default:
+                        Serial.printf("[WS C++ Test] Event type: %d\n", type);
+                        break;
+                }
+            });
+
+            // Test servers with host/port format (Links2004 API)
+            // NOTE: Many WebSocket servers now require WSS (secure) on port 443
+            struct TestServer {
+                const char* host;
+                uint16_t port;
+                const char* path;
+                bool useSSL;
+            };
+
+            TestServer testServers[] = {
+                {"echo.websocket.org", 443, "/", true},  // WSS on 443
+                {"ws.postman-echo.com", 80, "/raw", false}  // Try non-secure fallback
+            };
+
+            bool testSuccess = false;
+            for (int i = 0; i < 2; i++) {
+                Serial.printf("\n[WS C++ Test] Attempt #%d - Server: %s:%d%s (%s)\n",
+                    i+1, testServers[i].host, testServers[i].port, testServers[i].path,
+                    testServers[i].useSSL ? "WSS/SSL" : "WS/plain");
+
+                // Links2004 API: beginSSL() for secure, begin() for plain
+                if (testServers[i].useSSL) {
+                    Serial.println("[WS C++ Test] Using beginSSL() for secure connection");
+                    testWsClient->beginSSL(testServers[i].host, testServers[i].port, testServers[i].path);
+                } else {
+                    Serial.println("[WS C++ Test] Using begin() for plain connection");
+                    testWsClient->begin(testServers[i].host, testServers[i].port, testServers[i].path);
+                }
+
+                Serial.println("[WS C++ Test] Waiting for connection (5 sec)...");
+
+                // Loop to handle events
+                unsigned long startTime = millis();
+                bool connected = false;
+                while (millis() - startTime < 5000) {  // 5 second timeout
+                    testWsClient->loop();
+
+                    // Check if connected (Links2004 doesn't have direct isConnected method)
+                    // We rely on event callback
+                    delay(100);
+                }
+
+                // Try to send a message
+                Serial.println("[WS C++ Test] Sending test message...");
+                bool sendSuccess = testWsClient->sendTXT("Hello from C++ Links2004 test!");
+
+                if (sendSuccess) {
+                    Serial.println("[WS C++ Test] ✓ Message sent successfully!");
+                    testSuccess = true;
+
+                    // Wait for echo response
+                    Serial.println("[WS C++ Test] Waiting for echo (3 sec)...");
+                    startTime = millis();
+                    while (millis() - startTime < 3000) {
+                        testWsClient->loop();
+                        delay(100);
+                    }
+
+                    break;
+                } else {
+                    Serial.println("[WS C++ Test] ✗ Send failed - likely not connected");
+                }
+
+                testWsClient->disconnect();
+                delay(500);
+            }
+
+            delete testWsClient;
+
+            if (testSuccess) {
+                Serial.println("\n[WS C++ Test] ✓ VERDICT: Links2004 WebSocket library works in C++!");
+                Serial.println("[WS C++ Test] → Now need to update JS bindings to use this library");
+            } else {
+                Serial.println("\n[WS C++ Test] ✗ VERDICT: WebSocket still not working");
+                Serial.println("[WS C++ Test] → May need different library or configuration");
+            }
+
+            Serial.printf("[WS C++ Test] Final heap: %d bytes\n", ESP.getFreeHeap());
+        #else
+            Serial.println("[WS C++ Test] WebSocket support NOT enabled");
+            Serial.println("[WS C++ Test] Enable #define ENABLE_WEBSOCKET_SUPPORT in main.cpp");
+        #endif
+        Serial.println("===============================================\n");
+        // ========== END WEBSOCKET TEST ==========
+
         enterNormalMode();
     }
 
