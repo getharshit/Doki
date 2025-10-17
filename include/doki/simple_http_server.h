@@ -70,6 +70,12 @@ private:
                                   uint8_t* data,
                                   size_t len,
                                   bool final);
+    static void handleAnimationUpload(AsyncWebServerRequest* request,
+                                      const String& filename,
+                                      size_t index,
+                                      uint8_t* data,
+                                      size_t len,
+                                      bool final);
 
     // HTML generation
     static String generateDashboardHTML();

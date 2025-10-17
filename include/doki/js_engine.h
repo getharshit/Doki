@@ -254,6 +254,18 @@ private:
     static duk_ret_t _js_wsSend(duk_context* ctx);
     static duk_ret_t _js_wsOnMessage(duk_context* ctx);
     static duk_ret_t _js_wsDisconnect(duk_context* ctx);
+
+    // Animation
+    static duk_ret_t _js_loadAnimation(duk_context* ctx);
+    static duk_ret_t _js_playAnimation(duk_context* ctx);
+    static duk_ret_t _js_stopAnimation(duk_context* ctx);
+    static duk_ret_t _js_pauseAnimation(duk_context* ctx);
+    static duk_ret_t _js_resumeAnimation(duk_context* ctx);
+    static duk_ret_t _js_setAnimationPosition(duk_context* ctx);
+    static duk_ret_t _js_setAnimationSpeed(duk_context* ctx);
+    static duk_ret_t _js_setAnimationOpacity(duk_context* ctx);
+    static duk_ret_t _js_unloadAnimation(duk_context* ctx);
+    static duk_ret_t _js_updateAnimations(duk_context* ctx);
 #endif
 };
 

@@ -49,6 +49,51 @@ This document describes the overall architecture of Doki OS, including the main 
 
 ## Core Components
 
+### 0. Configuration System
+
+**Purpose**: Centralized hardware and timing configuration
+
+**Location**:
+- [include/hardware_config.h](../include/hardware_config.h) - Hardware constants
+- [include/timing_constants.h](../include/timing_constants.h) - Timing values
+
+**Why Centralized Configuration**:
+- Single source of truth for all constants
+- Easy board adaptation (change pins in one place)
+- Consistent timing across system
+- Eliminates scattered magic numbers
+
+**Hardware Config Examples**:
+```cpp
+// Display pins
+#define DISPLAY_0_CS_PIN 33
+#define DISPLAY_0_DC_PIN 15
+#define DISPLAY_WIDTH 240
+#define DISPLAY_HEIGHT 320
+
+// Memory configuration
+#define JS_HEAP_SIZE_KB 128
+#define LVGL_BUFFER_LINES 40
+
+// Task configuration
+#define TASK_STACK_NTP_SYNC 4096
+#define TASK_PRIORITY_NTP 1
+#define TASK_CORE_NETWORK 0
+```
+
+**Timing Config Examples**:
+```cpp
+// Update intervals
+#define UPDATE_INTERVAL_CLOCK_MS 1000
+#define UPDATE_INTERVAL_NTP_MS 3600000      // 1 hour
+#define UPDATE_INTERVAL_NTP_RETRY_MS 60000  // 1 minute
+#define UPDATE_INTERVAL_WEATHER_MS 600000   // 10 minutes
+
+// Timeouts and delays
+#define TIMEOUT_HTTP_REQUEST_MS 5000
+#define DELAY_NTP_INIT_MS 2000
+```
+
 ### 1. Main Program ([src/main.cpp](../src/main.cpp))
 
 **Purpose**: Entry point and system coordinator
@@ -58,6 +103,7 @@ This document describes the overall architecture of Doki OS, including the main 
 - Set up LVGL graphics system
 - Configure HTTP web server and API endpoints
 - Manage dual display contexts
+- Initialize TimeService for system-wide time sync
 - Main loop: Update apps and render displays
 
 **Key Functions**:
@@ -288,7 +334,76 @@ function loadApp(appId) {
 }
 ```
 
-### 5. Services Layer
+### 5. UI Helper Library
+
+**Purpose**: Reusable LVGL UI creation functions
+
+**Location**: [include/doki/lvgl_helpers.h](../include/doki/lvgl_helpers.h)
+
+**Benefits**:
+- Reduces app code by 30-40%
+- Consistent styling across apps
+- Less boilerplate for common UI patterns
+- Easier to maintain UI code
+
+**Available Functions**:
+```cpp
+// Label creation helpers
+lv_obj_t* createTitleLabel(parent, text, color, y_offset);
+lv_obj_t* createValueLabel(parent, text, color, y_offset);
+lv_obj_t* createStyledLabel(parent, text, color, font, align, x, y);
+lv_obj_t* createStatusLabel(parent, text, color, y_offset);
+lv_obj_t* createMetricLabel(parent, text, y_offset);
+lv_obj_t* createLargeValueLabel(parent, text, color, y_offset);
+
+// Progress bar helpers
+lv_obj_t* createProgressBar(parent, width, height, bg, fg, align, x, y);
+lv_obj_t* createHorizontalProgressBar(parent, width, y_offset);
+
+// Container helpers
+lv_obj_t* createContainer(parent, width, height, align, x, y);
+lv_obj_t* createCenteredContainer(parent, width, height);
+
+// Image helpers
+lv_obj_t* createCenteredImage(parent, src);
+lv_obj_t* createImageWithOffset(parent, src, x, y);
+
+// Style helpers
+void applyCardStyle(obj, bg_color, border_color);
+void applyGlowEffect(obj, color, intensity);
+void applyRoundedCorners(obj, radius);
+```
+
+**Color Palette**:
+```cpp
+namespace Colors {
+    constexpr uint32_t PRIMARY = 0x667eea;
+    constexpr uint32_t SUCCESS = 0x10b981;
+    constexpr uint32_t WARNING = 0xf59e0b;
+    constexpr uint32_t ERROR = 0xff4444;
+    constexpr uint32_t INFO = 0x3b82f6;
+    constexpr uint32_t ORANGE = 0xff6b35;
+    constexpr uint32_t CYAN = 0x00d4ff;
+    constexpr uint32_t PURPLE = 0x9333ea;
+    constexpr uint32_t LIGHT_GRAY = 0xe5e7eb;
+    constexpr uint32_t DARK_GRAY = 0x6b7280;
+}
+```
+
+**Example - Before and After**:
+```cpp
+// Before (7 lines)
+_timeLabel = lv_label_create(getScreen());
+lv_label_set_text(_timeLabel, "12:34:56");
+lv_obj_align(_timeLabel, LV_ALIGN_CENTER, 0, -50);
+lv_obj_set_style_text_font(_timeLabel, &lv_font_montserrat_48, 0);
+lv_obj_set_style_text_color(_timeLabel, lv_color_hex(0x667eea), 0);
+
+// After (1 line)
+_timeLabel = createValueLabel(getScreen(), "12:34:56", Colors::PRIMARY, -50);
+```
+
+### 6. Services Layer
 
 #### Weather Service ([src/doki/weather_service.cpp](../src/doki/weather_service.cpp))
 
@@ -327,29 +442,75 @@ Store in cache
 Return data
 ```
 
-#### Time Manager (NTP Client)
+#### TimeService (NTP Client Singleton)
 
-**Purpose**: Synchronize system time with internet
+**Purpose**: Centralized time synchronization for entire system
+
+**Architecture**: Singleton pattern with background synchronization
+
+**Location**: [include/doki/time_service.h](../include/doki/time_service.h)
+
+**Key Features**:
+- **Single NTP Client**: One client for entire system (eliminates UDP conflicts)
+- **Background Task**: Non-blocking synchronization on Core 0
+- **Smart Retry**: 1-hour interval when synced, 1-minute retry on failure
+- **Thread-Safe**: Volatile flags for cross-task communication
+- **Error Suppression**: Reduces console spam during sync attempts
 
 **Implementation**:
-- Each Clock app creates its own NTPClient instance
-- Runs in background FreeRTOS task (non-blocking)
-- Updates every 60 seconds
-
-**Architecture**:
 ```cpp
-// In ClockApp
-static void ntpUpdateTask(void* parameter) {
-    // Initial sync (blocking, but in background)
-    _ntpClient->forceUpdate();
+class TimeService {
+public:
+    static TimeService& getInstance();  // Singleton access
+    bool begin();                       // Initialize and start sync task
+    bool isTimeSynced() const;         // Check sync status
+    struct tm getLocalTime();          // Get current time
+    String getTimeString();            // Formatted time string
+    String getDateString();            // Formatted date string
+};
+```
+
+**Usage Example**:
+```cpp
+// Initialize once in main.cpp
+TimeService::getInstance().begin();
+
+// Use anywhere in the system
+if (TimeService::getInstance().isTimeSynced()) {
+    struct tm time = TimeService::getInstance().getLocalTime();
+    String timeStr = TimeService::getInstance().getTimeString();
+}
+```
+
+**Background Task**:
+```cpp
+static void syncTask(void* parameter) {
+    vTaskDelay(pdMS_TO_TICKS(DELAY_NTP_INIT_MS));
+
+    // Initial sync
+    if (_ntpClient->forceUpdate()) {
+        _synced = true;
+    }
 
     // Periodic updates
     while (true) {
-        vTaskDelay(pdMS_TO_TICKS(60000));
-        _ntpClient->update();
+        vTaskDelay(_synced ?
+            pdMS_TO_TICKS(UPDATE_INTERVAL_NTP_MS) :      // 1 hour
+            pdMS_TO_TICKS(UPDATE_INTERVAL_NTP_RETRY_MS)  // 1 minute
+        );
+        if (_ntpClient->update()) {
+            _synced = true;
+        }
     }
 }
 ```
+
+**Benefits Over Previous Approach**:
+- ✅ No duplicate NTP clients (eliminates UDP DNS errors)
+- ✅ Consistent time across all apps
+- ✅ Single background task (saves ~10KB RAM)
+- ✅ Centralized configuration
+- ✅ Easy to use from any app or JavaScript
 
 ### 6. Hardware Abstraction Layer
 

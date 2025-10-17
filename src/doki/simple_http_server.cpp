@@ -60,6 +60,14 @@ bool SimpleHttpServer::begin(uint16_t port) {
                 },
                 handleMediaUpload);
 
+    // API: Upload animation sprite (with body handler for multipart uploads)
+    _server->on("/api/animations/upload", HTTP_POST,
+                [](AsyncWebServerRequest* request) {
+                    // This is called after upload is complete
+                    request->send(200, "application/json", "{\"success\":true,\"message\":\"Animation uploaded\"}");
+                },
+                handleAnimationUpload);
+
     // API: Upload custom JavaScript code
     _server->on("/api/upload-js", HTTP_POST, handleUploadJS);
 
@@ -1056,6 +1064,77 @@ void SimpleHttpServer::handleMediaUpload(AsyncWebServerRequest* request,
             Serial.printf("[SimpleHTTP] ✓ Media saved successfully to Display %d\n", _uploadDisplayId);
         } else {
             Serial.printf("[SimpleHTTP] ✗ Failed to save media to Display %d\n", _uploadDisplayId);
+        }
+
+        // Clear upload buffer
+        _uploadBuffer.clear();
+    }
+}
+
+void SimpleHttpServer::handleAnimationUpload(AsyncWebServerRequest* request,
+                                              const String& filename,
+                                              size_t index,
+                                              uint8_t* data,
+                                              size_t len,
+                                              bool final) {
+    // First chunk - initialize upload
+    if (index == 0) {
+        Serial.printf("[SimpleHTTP] Starting animation upload: %s\n", filename.c_str());
+
+        // Clear upload buffer
+        _uploadBuffer.clear();
+        _uploadBuffer.reserve(1024 * 1024);  // Reserve 1MB for animation sprites
+    }
+
+    // Append data to buffer
+    for (size_t i = 0; i < len; i++) {
+        _uploadBuffer.push_back(data[i]);
+    }
+
+    Serial.printf("[SimpleHTTP] Animation upload progress: %zu bytes\n", _uploadBuffer.size());
+
+    // Final chunk - process upload
+    if (final) {
+        Serial.printf("[SimpleHTTP] Animation upload complete: %zu bytes total\n", _uploadBuffer.size());
+
+        // Validate size
+        if (_uploadBuffer.size() == 0) {
+            Serial.println("[SimpleHTTP] Error: Empty animation file");
+            return;
+        }
+
+        if (_uploadBuffer.size() > 1024 * 1024) {  // Max 1MB
+            Serial.printf("[SimpleHTTP] Error: Animation file too large (%zu bytes, max 1MB)\n",
+                          _uploadBuffer.size());
+            return;
+        }
+
+        // Validate magic number (first 4 bytes should be "DOKI" = 0x444F4B49)
+        if (_uploadBuffer.size() < 4) {
+            Serial.println("[SimpleHTTP] Error: File too small to be valid animation");
+            return;
+        }
+
+        uint32_t magic = *((uint32_t*)_uploadBuffer.data());
+        const uint32_t SPRITE_MAGIC = 0x444F4B49;  // "DOKI" in ASCII
+
+        if (magic != SPRITE_MAGIC) {
+            Serial.printf("[SimpleHTTP] Error: Invalid sprite file (magic: 0x%08X, expected: 0x%08X)\n",
+                         magic, SPRITE_MAGIC);
+            return;
+        }
+
+        Serial.println("[SimpleHTTP] ✓ Valid sprite file detected");
+
+        // Construct file path
+        String filepath = "/animations/" + filename;
+
+        // Save to SPIFFS
+        if (FilesystemManager::writeFile(filepath.c_str(), _uploadBuffer.data(), _uploadBuffer.size())) {
+            Serial.printf("[SimpleHTTP] ✓ Animation saved: %s (%zu bytes)\n",
+                         filepath.c_str(), _uploadBuffer.size());
+        } else {
+            Serial.printf("[SimpleHTTP] ✗ Failed to save animation: %s\n", filepath.c_str());
         }
 
         // Clear upload buffer

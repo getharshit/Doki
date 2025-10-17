@@ -10,8 +10,12 @@
 #define CLOCK_APP_H
 
 #include "doki/app_base.h"
+#include "doki/lvgl_helpers.h"
+#include "timing_constants.h"
 #include <NTPClient.h>
 #include <WiFiUdp.h>
+
+using namespace Doki;
 
 class ClockApp : public Doki::DokiApp {
 public:
@@ -27,7 +31,7 @@ public:
         
         // Initialize NTP objects (but don't start yet)
         _udp = new WiFiUDP();
-        _ntpClient = new NTPClient(*_udp, "pool.ntp.org", 19800, 60000);
+        _ntpClient = new NTPClient(*_udp, "pool.ntp.org", 19800, UPDATE_INTERVAL_NTP_RETRY_MS);
         
         // Static background circles
         _bgCircle1 = lv_obj_create(getScreen());
@@ -46,67 +50,38 @@ public:
         lv_obj_set_style_bg_opa(_bgCircle2, 38, 0);
         lv_obj_set_style_border_width(_bgCircle2, 0, 0);
         
-        // Time label
-        _timeLabel = lv_label_create(getScreen());
-        lv_label_set_text(_timeLabel, "Syncing...");
-        lv_obj_align(_timeLabel, LV_ALIGN_CENTER, 0, -50);
-        lv_obj_set_style_text_font(_timeLabel, &lv_font_montserrat_48, 0);
-        lv_obj_set_style_text_color(_timeLabel, lv_color_hex(0x667eea), 0);
-        
-        // AM/PM label
-        _ampmLabel = lv_label_create(getScreen());
-        lv_label_set_text(_ampmLabel, "");
-        lv_obj_align(_ampmLabel, LV_ALIGN_CENTER, 85, -60);
-        lv_obj_set_style_text_font(_ampmLabel, &lv_font_montserrat_18, 0);
-        lv_obj_set_style_text_color(_ampmLabel, lv_color_hex(0x888888), 0);
-        
+        // Time label (large, centered)
+        _timeLabel = createValueLabel(getScreen(), "Syncing...", 0x667eea, -50);
+
+        // AM/PM label (small, next to time)
+        _ampmLabel = createStyledLabel(getScreen(), "", Colors::GRAY,
+                                       &lv_font_montserrat_18, LV_ALIGN_CENTER, 85, -60);
+
         // Date label
-        _dateLabel = lv_label_create(getScreen());
-        lv_label_set_text(_dateLabel, "Please wait...");
-        lv_obj_align(_dateLabel, LV_ALIGN_CENTER, 0, 0);
-        lv_obj_set_style_text_font(_dateLabel, &lv_font_montserrat_16, 0);
-        lv_obj_set_style_text_color(_dateLabel, lv_color_hex(0x333333), 0);
-        
+        _dateLabel = createStyledLabel(getScreen(), "Please wait...", Colors::DARK_GRAY,
+                                       &lv_font_montserrat_16, LV_ALIGN_CENTER, 0, 0);
+
         // Day label
-        _dayLabel = lv_label_create(getScreen());
-        lv_label_set_text(_dayLabel, "");
-        lv_obj_align(_dayLabel, LV_ALIGN_CENTER, 0, 25);
-        lv_obj_set_style_text_font(_dayLabel, &lv_font_montserrat_14, 0);
-        lv_obj_set_style_text_color(_dayLabel, lv_color_hex(0x888888), 0);
+        _dayLabel = createInfoLabel(getScreen(), "", LV_ALIGN_CENTER, 0, 25);
         
         // Day progress bar
-        _dayProgress = lv_bar_create(getScreen());
-        lv_obj_set_size(_dayProgress, 200, 8);
-        lv_obj_align(_dayProgress, LV_ALIGN_CENTER, 0, 50);
+        _dayProgress = createProgressBar(getScreen(), 200, 8, Colors::LIGHT_GRAY, 0x667eea,
+                                        LV_ALIGN_CENTER, 0, 50);
         lv_bar_set_range(_dayProgress, 0, 86400);
-        lv_obj_set_style_bg_color(_dayProgress, lv_color_hex(0xe5e7eb), 0);
-        lv_obj_set_style_bg_color(_dayProgress, lv_color_hex(0x667eea), LV_PART_INDICATOR);
         lv_obj_set_style_radius(_dayProgress, 4, 0);
-        lv_obj_set_style_border_width(_dayProgress, 0, 0);
-        
+
         // Progress percentage
-        _progressLabel = lv_label_create(getScreen());
-        lv_label_set_text(_progressLabel, "");
-        lv_obj_align(_progressLabel, LV_ALIGN_CENTER, 0, 65);
-        lv_obj_set_style_text_font(_progressLabel, &lv_font_montserrat_10, 0);
-        lv_obj_set_style_text_color(_progressLabel, lv_color_hex(0x888888), 0);
-        
+        _progressLabel = createInfoLabel(getScreen(), "", LV_ALIGN_CENTER, 0, 65);
+
         // Seconds bar
-        _secondsBar = lv_bar_create(getScreen());
-        lv_obj_set_size(_secondsBar, 200, 4);
-        lv_obj_align(_secondsBar, LV_ALIGN_CENTER, 0, -20);
+        _secondsBar = createProgressBar(getScreen(), 200, 4, Colors::LIGHT_GRAY, Colors::SUCCESS,
+                                       LV_ALIGN_CENTER, 0, -20);
         lv_bar_set_range(_secondsBar, 0, 60);
-        lv_obj_set_style_bg_color(_secondsBar, lv_color_hex(0xe5e7eb), 0);
-        lv_obj_set_style_bg_color(_secondsBar, lv_color_hex(0x10b981), LV_PART_INDICATOR);
         lv_obj_set_style_radius(_secondsBar, 2, 0);
         lv_obj_set_style_border_width(_secondsBar, 0, 0);
         
         // Uptime
-        _uptimeLabel = lv_label_create(getScreen());
-        lv_label_set_text(_uptimeLabel, "");
-        lv_obj_align(_uptimeLabel, LV_ALIGN_BOTTOM_MID, 0, -10);
-        lv_obj_set_style_text_font(_uptimeLabel, &lv_font_montserrat_10, 0);
-        lv_obj_set_style_text_color(_uptimeLabel, lv_color_hex(0x888888), 0);
+        _uptimeLabel = createInfoLabel(getScreen(), "", LV_ALIGN_BOTTOM_MID, 0, -10);
         
         _lastUpdate = 0;
         _timeValid = false;

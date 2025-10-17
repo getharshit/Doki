@@ -13,6 +13,10 @@
 #include <SPI.h>
 #include <lvgl.h>
 
+// Doki OS Configuration
+#include "hardware_config.h"
+#include "timing_constants.h"
+
 // Doki OS Modules
 #include "doki/storage_manager.h"
 #include "doki/wifi_manager.h"
@@ -20,6 +24,7 @@
 #include "doki/qr_generator.h"
 #include "doki/app_manager.h"
 #include "doki/weather_service.h"
+#include "doki/time_service.h"
 #include "doki/simple_http_server.h"
 #include "doki/filesystem_manager.h"
 #include "doki/media_service.h"
@@ -47,26 +52,24 @@
 #include "apps/custom_js/custom_js_app.h"
 
 // ========================================
-// Hardware Configuration
+// Hardware Configuration (now in hardware_config.h)
 // ========================================
 
-// Display Pins (from original working configuration)
-#define DISP0_CS 33
-#define DISP0_DC 15
-#define DISP0_RST 16
+// Using constants from hardware_config.h
+#define DISP0_CS DISPLAY_0_CS_PIN
+#define DISP0_DC DISPLAY_0_DC_PIN
+#define DISP0_RST DISPLAY_0_RST_PIN
 
-#define DISP1_CS 34
-#define DISP1_DC 17
-#define DISP1_RST 18
+#define DISP1_CS DISPLAY_1_CS_PIN
+#define DISP1_DC DISPLAY_1_DC_PIN
+#define DISP1_RST DISPLAY_1_RST_PIN
 
-// SPI Pins
-#define TFT_SCLK 36
-#define TFT_MOSI 37
+#define TFT_SCLK SPI_SCLK_PIN
+#define TFT_MOSI SPI_MOSI_PIN
 
-// Display Configuration
-#define TFT_WIDTH 240
-#define TFT_HEIGHT 320
-#define DISPLAY_COUNT 2
+#define TFT_WIDTH DISPLAY_WIDTH
+#define TFT_HEIGHT DISPLAY_HEIGHT
+// DISPLAY_COUNT already defined in hardware_config.h
 
 // ST7789 Commands
 #define ST7789_SWRESET 0x01
@@ -186,30 +189,28 @@ void initDisplayHardware(uint8_t cs, uint8_t dc, uint8_t rst) {
 // LVGL Flush Callbacks
 // ========================================
 
-void lvgl_flush_display0(lv_disp_drv_t* disp, const lv_area_t* area, lv_color_t* color_p) {
+// Unified display flush function (eliminates duplication)
+void lvgl_flush_display_generic(lv_disp_drv_t* disp, const lv_area_t* area,
+                                 lv_color_t* color_p, uint8_t cs_pin, uint8_t dc_pin) {
     uint32_t w = (area->x2 - area->x1 + 1);
     uint32_t h = (area->y2 - area->y1 + 1);
-    setAddrWindow(DISP0_CS, DISP0_DC, area->x1, area->y1, area->x2, area->y2);
-    digitalWrite(DISP0_DC, HIGH);
-    digitalWrite(DISP0_CS, LOW);
+    setAddrWindow(cs_pin, dc_pin, area->x1, area->y1, area->x2, area->y2);
+    digitalWrite(dc_pin, HIGH);
+    digitalWrite(cs_pin, LOW);
     for (uint32_t i = 0; i < w * h; i++) {
         spi.transfer16(color_p[i].full);
     }
-    digitalWrite(DISP0_CS, HIGH);
+    digitalWrite(cs_pin, HIGH);
     lv_disp_flush_ready(disp);
 }
 
+// Display-specific wrappers (for LVGL callback compatibility)
+void lvgl_flush_display0(lv_disp_drv_t* disp, const lv_area_t* area, lv_color_t* color_p) {
+    lvgl_flush_display_generic(disp, area, color_p, DISP0_CS, DISP0_DC);
+}
+
 void lvgl_flush_display1(lv_disp_drv_t* disp, const lv_area_t* area, lv_color_t* color_p) {
-    uint32_t w = (area->x2 - area->x1 + 1);
-    uint32_t h = (area->y2 - area->y1 + 1);
-    setAddrWindow(DISP1_CS, DISP1_DC, area->x1, area->y1, area->x2, area->y2);
-    digitalWrite(DISP1_DC, HIGH);
-    digitalWrite(DISP1_CS, LOW);
-    for (uint32_t i = 0; i < w * h; i++) {
-        spi.transfer16(color_p[i].full);
-    }
-    digitalWrite(DISP1_CS, HIGH);
-    lv_disp_flush_ready(disp);
+    lvgl_flush_display_generic(disp, area, color_p, DISP1_CS, DISP1_DC);
 }
 
 // ========================================
@@ -400,6 +401,9 @@ void enterNormalMode() {
     Serial.println("║         NORMAL MODE - Loading Apps                ║");
     Serial.println("╚═══════════════════════════════════════════════════╝\n");
 
+    // Initialize TimeService (centralized NTP singleton)
+    Doki::TimeService::getInstance().begin();
+
     // Initialize weather service
     Doki::WeatherService::init(WEATHER_API_KEY);
 
@@ -555,6 +559,13 @@ void setup() {
         },
         "WebSocket diagnostic and testing tool");
 
+    // Animation Chain - Sequential animation playback demo
+    Doki::AppManager::registerApp("animation_chain", "Animation Chain",
+        []() -> Doki::DokiApp* {
+            return new Doki::JSApp("animation_chain", "Animation Chain", "/apps/animation_chain.js");
+        },
+        "Demo of sequential animation playback with smooth transitions");
+
     Doki::AppManager::printStatus();
 
     // Step 4: Initialize WiFi Manager
@@ -579,6 +590,9 @@ void setup() {
     } else {
         Serial.printf("[Main] ✓ Connected to WiFi: %s\n", WiFi.localIP().toString().c_str());
 
+        // ========== DIAGNOSTIC TESTS (moved to separate file in Phase 2) ==========
+        // TODO: Move to test/network_diagnostics.cpp
+        #ifdef DEBUG_WEBSOCKET_DIAGNOSTICS
         // ========== TCP CLIENT TEST (DIAGNOSTIC) ==========
         Serial.println("\n========== TCP Client Test ==========");
         Serial.println("[TCP Test] Testing basic WiFiClient (same class WebSocket uses)");
@@ -805,6 +819,8 @@ void setup() {
         #endif
         Serial.println("===============================================\n");
         // ========== END WEBSOCKET TEST ==========
+        #endif // DEBUG_WEBSOCKET_DIAGNOSTICS
+        // ========== END DIAGNOSTIC TESTS ==========
 
         enterNormalMode();
     }

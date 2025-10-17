@@ -13,6 +13,10 @@
 #define WEATHER_APP_H
 
 #include "doki/app_base.h"
+#include "doki/lvgl_helpers.h"
+#include "timing_constants.h"
+
+using namespace Doki;
 #include "doki/weather_service.h"
 #include <math.h>
 

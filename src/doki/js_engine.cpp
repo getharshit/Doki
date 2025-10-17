@@ -7,11 +7,13 @@
 #include "doki/filesystem_manager.h"
 #include "doki/state_persistence.h"
 #include "doki/app_manager.h"
+#include "doki/time_service.h"
+#include "doki/animation/animation_manager.h"
+#include "hardware_config.h"
+#include "timing_constants.h"
 #include <lvgl.h>
 #include <HTTPClient.h>
 #include <PubSubClient.h>
-#include <NTPClient.h>
-#include <WiFiUdp.h>
 
 // WebSocket support - enabled for diagnostic testing
 #define ENABLE_WEBSOCKET_SUPPORT
@@ -24,89 +26,6 @@ namespace Doki {
 // Static member initialization
 bool JSEngine::_initialized = false;
 String JSEngine::_lastError = "";
-
-// Global NTP Client for JavaScript time functions
-// Timezone offset: Asia/Kolkata (UTC+5:30) = 19800 seconds
-static WiFiUDP ntpUDP;
-static NTPClient* globalTimeClient = nullptr;
-static bool ntpInitialized = false;
-static TaskHandle_t ntpSyncTaskHandle = nullptr;
-static volatile bool ntpSynced = false;
-
-// Background task for NTP sync (prevents blocking main thread)
-static void ntpSyncTask(void* parameter) {
-    Serial.println("[JSEngine NTP] Background sync task started");
-
-    // Wait a bit for WiFi to stabilize
-    vTaskDelay(pdMS_TO_TICKS(2000));
-
-    // Suppress WiFiUdp ESP-IDF errors to avoid console spam on transient failures
-    esp_log_level_set("WiFiUdp", ESP_LOG_ERROR);
-
-    // Perform initial sync (this will block, but only in background task)
-    Serial.println("[JSEngine NTP] Performing initial sync...");
-    if (globalTimeClient && globalTimeClient->forceUpdate()) {
-        ntpSynced = true;
-        Serial.println("[JSEngine NTP] ✓ Time synced successfully");
-        Serial.println("[JSEngine NTP] Will update every 1 hour");
-    } else {
-        Serial.println("[JSEngine NTP] ✗ Initial sync failed, will retry in 60s");
-    }
-
-    // Failure tracking for exponential backoff
-    int failureCount = 0;
-    const int MAX_FAILURES = 5;
-
-    // Keep updating every 1 hour (standard for embedded NTP clients)
-    // ESP32 RTC is accurate enough that hourly sync is more than sufficient
-    while (true) {
-        // Wait interval: 1 hour normally, 60s if initial sync failed
-        if (ntpSynced) {
-            vTaskDelay(pdMS_TO_TICKS(3600000));  // 1 hour (3600000 ms)
-        } else {
-            vTaskDelay(pdMS_TO_TICKS(60000));  // 60 seconds (retry faster if not synced)
-        }
-
-        // Attempt update
-        if (globalTimeClient && globalTimeClient->update()) {
-            failureCount = 0;  // Reset on success
-            if (!ntpSynced) {
-                ntpSynced = true;
-                Serial.println("[JSEngine NTP] ✓ Time synced successfully");
-            }
-            // Silent success after first sync (avoid console spam)
-        } else {
-            // Only log failures if not yet synced or if many consecutive failures
-            failureCount++;
-            if (!ntpSynced || failureCount >= MAX_FAILURES) {
-                Serial.printf("[JSEngine NTP] Update failed (attempt %d), will retry\n", failureCount);
-            }
-        }
-    }
-}
-
-// Initialize NTP client in background (non-blocking)
-static void initNTPClient() {
-    if (ntpInitialized) return;
-
-    Serial.println("[JSEngine] Initializing NTP client (non-blocking)...");
-    globalTimeClient = new NTPClient(ntpUDP, "pool.ntp.org", 19800, 60000);
-    globalTimeClient->begin();
-
-    // Start background sync task on Core 0
-    xTaskCreatePinnedToCore(
-        ntpSyncTask,
-        "NTP_Sync",
-        4096,
-        nullptr,
-        1,  // Low priority
-        &ntpSyncTaskHandle,
-        0   // Core 0
-    );
-
-    ntpInitialized = true;
-    Serial.println("[JSEngine] ✓ NTP client initialized (syncing in background)");
-}
 
 bool JSEngine::init() {
     if (_initialized) {
@@ -438,13 +357,44 @@ void JSEngine::registerDokiAPIs(void* ctx) {
     duk_push_c_function(duk_ctx, _js_wsDisconnect, 0);
     duk_put_global_string(duk_ctx, "wsDisconnect");
 
+    // Animation
+    duk_push_c_function(duk_ctx, _js_loadAnimation, 1);
+    duk_put_global_string(duk_ctx, "loadAnimation");
+
+    duk_push_c_function(duk_ctx, _js_playAnimation, 2);
+    duk_put_global_string(duk_ctx, "playAnimation");
+
+    duk_push_c_function(duk_ctx, _js_stopAnimation, 1);
+    duk_put_global_string(duk_ctx, "stopAnimation");
+
+    duk_push_c_function(duk_ctx, _js_pauseAnimation, 1);
+    duk_put_global_string(duk_ctx, "pauseAnimation");
+
+    duk_push_c_function(duk_ctx, _js_resumeAnimation, 1);
+    duk_put_global_string(duk_ctx, "resumeAnimation");
+
+    duk_push_c_function(duk_ctx, _js_setAnimationPosition, 3);
+    duk_put_global_string(duk_ctx, "setAnimationPosition");
+
+    duk_push_c_function(duk_ctx, _js_setAnimationSpeed, 2);
+    duk_put_global_string(duk_ctx, "setAnimationSpeed");
+
+    duk_push_c_function(duk_ctx, _js_setAnimationOpacity, 2);
+    duk_put_global_string(duk_ctx, "setAnimationOpacity");
+
+    duk_push_c_function(duk_ctx, _js_unloadAnimation, 1);
+    duk_put_global_string(duk_ctx, "unloadAnimation");
+
+    duk_push_c_function(duk_ctx, _js_updateAnimations, 0);
+    duk_put_global_string(duk_ctx, "updateAnimations");
+
     // Initialize display ID to 0 (can be overridden with setDisplayId)
     duk_push_global_stash(duk_ctx);
     duk_push_int(duk_ctx, 0);
     duk_put_prop_string(duk_ctx, -2, "__displayId");
     duk_pop(duk_ctx);
 
-    Serial.println("[JSEngine] ✓ Registered Doki OS APIs (Advanced Features Enabled)");
+    Serial.println("[JSEngine] ✓ Registered Doki OS APIs (Advanced Features Enabled + Animation)");
 #endif
 }
 
@@ -646,59 +596,54 @@ duk_ret_t JSEngine::_js_millis(duk_context* ctx) {
 }
 
 duk_ret_t JSEngine::_js_getTime(duk_context* ctx) {
-    // Lazy initialization - only initialize NTP when first called (after WiFi is connected)
-    if (!ntpInitialized) {
-        initNTPClient();  // Non-blocking initialization
-    }
+    // Use centralized TimeService singleton
+    TimeService& timeService = TimeService::getInstance();
 
-    // Check if NTP has synced yet
-    if (!ntpSynced || !globalTimeClient) {
+    // Check if time has synced yet
+    if (!timeService.isTimeSynced()) {
         // Still syncing in background, return null
         duk_push_null(ctx);
         return 1;
     }
 
-    // Get epoch time (no update call needed, background task handles it)
-    time_t epochTime = globalTimeClient->getEpochTime();
+    // Get local time from TimeService
+    struct tm timeInfo = timeService.getLocalTime();
 
-    if (epochTime < 1000000000) {
-        // Not synced yet (shouldn't happen if ntpSynced is true, but safety check)
+    if (timeInfo.tm_year == 0) {
+        // Not valid yet
         duk_push_null(ctx);
         return 1;
     }
-
-    // Convert to local time structure
-    struct tm* timeInfo = localtime(&epochTime);
 
     // Create JavaScript object with time components
     duk_push_object(ctx);
 
     // Hours (24-hour format)
-    duk_push_int(ctx, timeInfo->tm_hour);
+    duk_push_int(ctx, timeInfo.tm_hour);
     duk_put_prop_string(ctx, -2, "hour");
 
     // Minutes
-    duk_push_int(ctx, timeInfo->tm_min);
+    duk_push_int(ctx, timeInfo.tm_min);
     duk_put_prop_string(ctx, -2, "minute");
 
     // Seconds
-    duk_push_int(ctx, timeInfo->tm_sec);
+    duk_push_int(ctx, timeInfo.tm_sec);
     duk_put_prop_string(ctx, -2, "second");
 
     // Day of month (1-31)
-    duk_push_int(ctx, timeInfo->tm_mday);
+    duk_push_int(ctx, timeInfo.tm_mday);
     duk_put_prop_string(ctx, -2, "day");
 
     // Month (1-12, JavaScript style)
-    duk_push_int(ctx, timeInfo->tm_mon + 1);
+    duk_push_int(ctx, timeInfo.tm_mon + 1);
     duk_put_prop_string(ctx, -2, "month");
 
     // Year (full year)
-    duk_push_int(ctx, timeInfo->tm_year + 1900);
+    duk_push_int(ctx, timeInfo.tm_year + 1900);
     duk_put_prop_string(ctx, -2, "year");
 
     // Day of week (0=Sunday, 6=Saturday)
-    duk_push_int(ctx, timeInfo->tm_wday);
+    duk_push_int(ctx, timeInfo.tm_wday);
     duk_put_prop_string(ctx, -2, "weekday");
 
     return 1;
@@ -713,7 +658,7 @@ duk_ret_t JSEngine::_js_httpGet(duk_context* ctx) {
     // Use HTTPClient to fetch data
     HTTPClient http;
     http.begin(url);
-    http.setTimeout(5000);  // 5 second timeout
+    http.setTimeout(TIMEOUT_HTTP_REQUEST_MS);
 
     int httpCode = http.GET();
 
@@ -1190,7 +1135,7 @@ duk_ret_t JSEngine::_js_mqttConnect(duk_context* ctx) {
     mqttClient->setCallback(mqttCallback);
 
     // Set socket timeout to prevent blocking (default is too long)
-    mqttClient->setSocketTimeout(5);  // 5 seconds timeout
+    mqttClient->setSocketTimeout(TIMEOUT_MQTT_SOCKET_SEC);
 
     // Attempt connection (this may still block briefly, but with timeout)
     bool connected = mqttClient->connect(clientId);
@@ -1357,14 +1302,14 @@ duk_ret_t JSEngine::_js_wsConnect(duk_context* ctx) {
 
         // CRITICAL FIX #1: Set short reconnect interval (default is ~5000ms!)
         // This allows quick retries if first connection fails
-        wsClient->setReconnectInterval(500);  // Retry every 500ms
-        Serial.println("[WS] Set reconnect interval to 500ms");
+        wsClient->setReconnectInterval(DELAY_WS_RECONNECT_MS);
+        Serial.printf("[WS] Set reconnect interval to %dms\n", DELAY_WS_RECONNECT_MS);
     } else {
         // CRITICAL FIX #2: Disconnect cleanly before reconnecting
         // This resets the reconnection timer and cleans up old state
         Serial.println("[WS] Disconnecting existing connection...");
         wsClient->disconnect();
-        delay(100);  // Brief delay for cleanup
+        delay(DELAY_WS_CLEANUP_MS);  // Brief delay for cleanup
     }
 
     wsDukContext = ctx;
@@ -1506,6 +1451,145 @@ duk_ret_t JSEngine::_js_wsDisconnect(duk_context* ctx) {
         Serial.println("[WebSocket] Disconnected and cleaned up");
     }
 #endif
+    return 0;
+}
+
+// ==========================================
+// Animation Functions
+// ==========================================
+
+duk_ret_t JSEngine::_js_loadAnimation(duk_context* ctx) {
+    const char* filepath = duk_to_string(ctx, 0);
+
+    Serial.printf("[JS] Loading animation: %s\n", filepath);
+
+    // Get current screen for display
+    lv_obj_t* screen = lv_scr_act();
+
+    // Create animation options
+    Doki::Animation::AnimationOptions options;
+    options.autoPlay = false;  // Don't auto-play, let JS control it
+    options.loopMode = Doki::Animation::LoopMode::ONCE;
+
+    // Load animation through manager
+    Doki::Animation::AnimationManager& mgr = Doki::Animation::AnimationManager::getInstance();
+
+    // Initialize manager if not already done
+    if (!mgr.isInitialized()) {
+        mgr.init();
+    }
+
+    int32_t animId = mgr.loadAnimation(filepath, screen, options);
+
+    if (animId < 0) {
+        Serial.println("[JS] Error: Failed to load animation");
+        duk_push_int(ctx, -1);
+        return 1;
+    }
+
+    Serial.printf("[JS] Animation loaded with ID: %d\n", animId);
+    duk_push_int(ctx, animId);
+    return 1;
+}
+
+duk_ret_t JSEngine::_js_playAnimation(duk_context* ctx) {
+    int32_t animId = duk_to_int(ctx, 0);
+    bool loop = false;
+
+    if (duk_get_top(ctx) >= 2) {
+        loop = duk_to_boolean(ctx, 1);
+    }
+
+    Serial.printf("[JS] Playing animation %d (loop=%d)\n", animId, loop);
+
+    Doki::Animation::AnimationManager& mgr = Doki::Animation::AnimationManager::getInstance();
+
+    Doki::Animation::LoopMode mode = loop ?
+        Doki::Animation::LoopMode::LOOP :
+        Doki::Animation::LoopMode::ONCE;
+
+    bool success = mgr.playAnimation(animId, mode);
+
+    duk_push_boolean(ctx, success);
+    return 1;
+}
+
+duk_ret_t JSEngine::_js_stopAnimation(duk_context* ctx) {
+    int32_t animId = duk_to_int(ctx, 0);
+
+    Serial.printf("[JS] Stopping animation %d\n", animId);
+
+    Doki::Animation::AnimationManager& mgr = Doki::Animation::AnimationManager::getInstance();
+    mgr.stopAnimation(animId);
+
+    return 0;
+}
+
+duk_ret_t JSEngine::_js_pauseAnimation(duk_context* ctx) {
+    int32_t animId = duk_to_int(ctx, 0);
+
+    Doki::Animation::AnimationManager& mgr = Doki::Animation::AnimationManager::getInstance();
+    mgr.pauseAnimation(animId);
+
+    return 0;
+}
+
+duk_ret_t JSEngine::_js_resumeAnimation(duk_context* ctx) {
+    int32_t animId = duk_to_int(ctx, 0);
+
+    Doki::Animation::AnimationManager& mgr = Doki::Animation::AnimationManager::getInstance();
+    mgr.resumeAnimation(animId);
+
+    return 0;
+}
+
+duk_ret_t JSEngine::_js_setAnimationPosition(duk_context* ctx) {
+    int32_t animId = duk_to_int(ctx, 0);
+    int16_t x = duk_to_int(ctx, 1);
+    int16_t y = duk_to_int(ctx, 2);
+
+    Doki::Animation::AnimationManager& mgr = Doki::Animation::AnimationManager::getInstance();
+    mgr.setPosition(animId, x, y);
+
+    return 0;
+}
+
+duk_ret_t JSEngine::_js_setAnimationSpeed(duk_context* ctx) {
+    int32_t animId = duk_to_int(ctx, 0);
+    float speed = (float)duk_to_number(ctx, 1);
+
+    Doki::Animation::AnimationManager& mgr = Doki::Animation::AnimationManager::getInstance();
+    mgr.setSpeed(animId, speed);
+
+    return 0;
+}
+
+duk_ret_t JSEngine::_js_setAnimationOpacity(duk_context* ctx) {
+    int32_t animId = duk_to_int(ctx, 0);
+    uint8_t opacity = duk_to_uint(ctx, 1);
+
+    Doki::Animation::AnimationManager& mgr = Doki::Animation::AnimationManager::getInstance();
+    mgr.setOpacity(animId, opacity);
+
+    return 0;
+}
+
+duk_ret_t JSEngine::_js_unloadAnimation(duk_context* ctx) {
+    int32_t animId = duk_to_int(ctx, 0);
+
+    Serial.printf("[JS] Unloading animation %d\n", animId);
+
+    Doki::Animation::AnimationManager& mgr = Doki::Animation::AnimationManager::getInstance();
+    mgr.unloadAnimation(animId);
+
+    return 0;
+}
+
+duk_ret_t JSEngine::_js_updateAnimations(duk_context* ctx) {
+    // Update all animations (should be called in app update loop)
+    Doki::Animation::AnimationManager& mgr = Doki::Animation::AnimationManager::getInstance();
+    mgr.updateAll();
+
     return 0;
 }
 
