@@ -24,6 +24,8 @@
 #include "doki/filesystem_manager.h"
 #include "doki/media_service.h"
 #include "doki/lvgl_fs_driver.h"
+#include "doki/state_persistence.h"
+#include "doki/lvgl_manager.h"
 
 // Import apps
 #include "apps/clock_app/clock_app.h"
@@ -382,74 +384,7 @@ void exitSetupMode() {
 // Normal Mode Functions
 // ========================================
 
-Doki::DokiApp* createApp(const String& appId, uint8_t displayId) {
-    if (appId == "clock") return new ClockApp();
-    if (appId == "weather") return new WeatherApp();
-    if (appId == "sysinfo") return new SysInfoApp();
-    if (appId == "hello") return new HelloApp();
-    if (appId == "goodbye") return new GoodbyeApp();
-    if (appId == "blank") return new BlankApp();
-    if (appId == "image") return new ImagePreviewApp(displayId);
-    if (appId == "gif") return new GifPlayerApp(displayId);
-    return nullptr;
-}
-
-bool loadAppOnDisplay(uint8_t displayId, const String& appId) {
-    if (displayId >= DISPLAY_COUNT) return false;
-
-    Display* d = &displays[displayId];
-
-    // Set display context
-    lv_disp_set_default(d->disp);
-    lv_obj_t* screen = lv_disp_get_scr_act(d->disp);
-
-    // Destroy old app first
-    if (d->app) {
-        d->app->onDestroy();
-        delete d->app;
-        d->app = nullptr;
-    }
-
-    // Clear screen and fill with black
-    lv_obj_clean(screen);
-    lv_obj_set_style_bg_color(screen, lv_color_hex(0x000000), 0);
-    lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
-
-    // Force LVGL to process pending tasks and complete rendering
-    lv_timer_handler();
-
-    // Create and load new app
-    d->app = createApp(appId, displayId);
-    if (!d->app) {
-        Serial.printf("[Main] ✗ Failed to create app '%s'\n", appId.c_str());
-        return false;
-    }
-
-    // Initialize app on clean screen
-    d->app->onCreate();
-    d->app->onStart();
-
-    d->appId = appId;
-    d->appStartTime = millis();
-
-    Serial.printf("[Main] ✓ Loaded app '%s' on Display %d\n", appId.c_str(), displayId);
-    return true;
-}
-
-
-// ========================================
-// HTTP Server Callbacks
-// ========================================
-
-void getDisplayStatus(uint8_t displayId, String& appId, uint32_t& uptime) {
-    if (displayId >= DISPLAY_COUNT) {
-        appId = "";
-        uptime = 0;
-        return;
-    }
-    appId = displays[displayId].appId;
-    uptime = displays[displayId].app ? (millis() - displays[displayId].appStartTime) / 1000 : 0;
-}
+// Old functions removed - now using AppManager
 
 void enterNormalMode() {
     Serial.println("\n╔═══════════════════════════════════════════════════╗");
@@ -459,11 +394,7 @@ void enterNormalMode() {
     // Initialize weather service
     Doki::WeatherService::init(WEATHER_API_KEY);
 
-    // Set HTTP server callbacks
-    Doki::SimpleHttpServer::setLoadAppCallback(loadAppOnDisplay);
-    Doki::SimpleHttpServer::setStatusCallback(getDisplayStatus);
-
-    // Start HTTP server
+    // Start HTTP server (no callbacks needed - uses AppManager directly)
     if (Doki::SimpleHttpServer::begin(80)) {
         String ip = WiFi.localIP().toString();
         Serial.println("\n╔═══════════════════════════════════════════════════╗");
@@ -475,9 +406,9 @@ void enterNormalMode() {
         Serial.println("[Main] ✗ Failed to start HTTP server");
     }
 
-    // Load default apps
-    loadAppOnDisplay(0, "clock");
-    loadAppOnDisplay(1, "weather");
+    // Load default apps using AppManager
+    Doki::AppManager::loadApp(0, "clock");
+    Doki::AppManager::loadApp(1, "weather");
 
     Serial.println("\n[Main] ✓ System ready!\n");
 }
@@ -529,6 +460,13 @@ void setup() {
     lv_init();
     Serial.println("[Main] ✓ LVGL initialized");
 
+    // Step 2.5: Initialize LVGL Thread Safety
+    Serial.println("\n[Main] Step 2.5/7: Initializing LVGL mutex...");
+    if (!Doki::LVGLManager::init()) {
+        Serial.println("[Main] ✗ LVGL mutex initialization failed!");
+        while (1) delay(1000);
+    }
+
     // Register LVGL filesystem driver for SPIFFS
     if (!Doki::LvglFsDriver::init()) {
         Serial.println("[Main] ✗ LVGL filesystem driver initialization failed!");
@@ -549,10 +487,43 @@ void setup() {
 
     // Show boot splash
     Serial.println("[Main] Showing boot splash...");
+    Doki::LVGLManager::lock();
     showBootSplash(0);
     showBootSplash(1);
     lv_timer_handler();
+    Doki::LVGLManager::unlock();
     delay(2000);
+
+    // Step 3.5: Initialize StatePersistence
+    Serial.println("\n[Main] Step 3.5/7: Initializing StatePersistence...");
+    if (!Doki::StatePersistence::init()) {
+        Serial.println("[Main] ✗ StatePersistence initialization failed!");
+        while (1) delay(1000);
+    }
+
+    // Step 3.6: Initialize AppManager
+    Serial.println("\n[Main] Step 3.6/7: Initializing AppManager...");
+    lv_disp_t* displayHandles[DISPLAY_COUNT];
+    for (uint8_t i = 0; i < DISPLAY_COUNT; i++) {
+        displayHandles[i] = displays[i].disp;
+    }
+    if (!Doki::AppManager::init(DISPLAY_COUNT, displayHandles)) {
+        Serial.println("[Main] ✗ AppManager initialization failed!");
+        while (1) delay(1000);
+    }
+
+    // Register all apps
+    Serial.println("[Main] Registering apps...");
+    Doki::AppManager::registerApp("clock", "Clock", []() -> Doki::DokiApp* { return new ClockApp(); }, "Displays current time");
+    Doki::AppManager::registerApp("weather", "Weather", []() -> Doki::DokiApp* { return new WeatherApp(); }, "Shows weather information");
+    Doki::AppManager::registerApp("sysinfo", "System Info", []() -> Doki::DokiApp* { return new SysInfoApp(); }, "System diagnostics");
+    Doki::AppManager::registerApp("hello", "Hello", []() -> Doki::DokiApp* { return new HelloApp(); }, "Hello World app");
+    Doki::AppManager::registerApp("goodbye", "Goodbye", []() -> Doki::DokiApp* { return new GoodbyeApp(); }, "Goodbye app");
+    Doki::AppManager::registerApp("blank", "Blank", []() -> Doki::DokiApp* { return new BlankApp(); }, "Blank screen");
+    Doki::AppManager::registerApp("image", "Image Viewer", []() -> Doki::DokiApp* { return new ImagePreviewApp(); }, "Display images");
+    Doki::AppManager::registerApp("gif", "GIF Player", []() -> Doki::DokiApp* { return new GifPlayerApp(); }, "Play animated GIFs");
+
+    Doki::AppManager::printStatus();
 
     // Step 4: Initialize WiFi Manager
     Serial.println("\n[Main] Step 4/5: Initializing WiFi...");
@@ -596,19 +567,17 @@ void loop() {
             ESP.restart();
         }
     } else {
-        // Normal Mode: Update apps
-        for (uint8_t i = 0; i < DISPLAY_COUNT; i++) {
-            if (displays[i].app) {
-                lv_disp_set_default(displays[i].disp);
-                displays[i].app->onUpdate();
-            }
-        }
+        // Normal Mode: Update all apps via AppManager
+        Doki::AppManager::update();
 
         // Handle WiFi reconnection
         Doki::WiFiManager::handleReconnection();
     }
 
-    // Always update LVGL
+    // Always update LVGL (protected by mutex)
+    Doki::LVGLManager::lock();
     lv_timer_handler();
+    Doki::LVGLManager::unlock();
+
     delay(5);
 }

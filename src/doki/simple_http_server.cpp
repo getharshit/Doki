@@ -5,6 +5,7 @@
 
 #include "doki/simple_http_server.h"
 #include "doki/media_service.h"
+#include "doki/app_manager.h"
 #include <WiFi.h>
 
 namespace Doki {
@@ -97,15 +98,14 @@ void SimpleHttpServer::handleGetApps(AsyncWebServerRequest* request) {
     JsonDocument doc;
     JsonArray apps = doc["apps"].to<JsonArray>();
 
-    // List of available apps
-    apps.add("clock");
-    apps.add("weather");
-    apps.add("sysinfo");
-    apps.add("hello");
-    apps.add("goodbye");
-    apps.add("blank");
-    apps.add("image");
-    apps.add("gif");
+    // Get apps from AppManager registry
+    auto registeredApps = AppManager::getRegisteredApps();
+    for (const auto& app : registeredApps) {
+        JsonObject appObj = apps.add<JsonObject>();
+        appObj["id"] = app.id;
+        appObj["name"] = app.name;
+        appObj["description"] = app.description;
+    }
 
     String response;
     serializeJson(doc, response);
@@ -113,25 +113,22 @@ void SimpleHttpServer::handleGetApps(AsyncWebServerRequest* request) {
 }
 
 void SimpleHttpServer::handleLoadApp(AsyncWebServerRequest* request) {
-    if (!_loadAppCallback) {
-        request->send(500, "application/json", "{\"error\":\"No callback set\"}");
-        return;
-    }
-
     if (!request->hasParam("display") || !request->hasParam("app")) {
         request->send(400, "application/json", "{\"error\":\"Missing display or app parameter\"}");
         return;
     }
 
-    int displayId = request->getParam("display")->value().toInt();
+    uint8_t displayId = request->getParam("display")->value().toInt();
     String appId = request->getParam("app")->value();
 
-    if (displayId < 0 || displayId >= 2) {
+    // Validate display ID
+    if (displayId >= AppManager::getNumDisplays()) {
         request->send(400, "application/json", "{\"error\":\"Invalid display ID\"}");
         return;
     }
 
-    bool success = _loadAppCallback(displayId, appId);
+    // Load app using AppManager
+    bool success = AppManager::loadApp(displayId, appId.c_str());
 
     if (success) {
         request->send(200, "application/json", "{\"success\":true}");
@@ -141,18 +138,13 @@ void SimpleHttpServer::handleLoadApp(AsyncWebServerRequest* request) {
 }
 
 void SimpleHttpServer::handleGetStatus(AsyncWebServerRequest* request) {
-    if (!_statusCallback) {
-        request->send(500, "application/json", "{\"error\":\"No callback set\"}");
-        return;
-    }
-
     JsonDocument doc;
     JsonArray disps = doc["displays"].to<JsonArray>();
 
-    for (int i = 0; i < 2; i++) {
-        String appId;
-        uint32_t uptime = 0;
-        _statusCallback(i, appId, uptime);
+    uint8_t numDisplays = AppManager::getNumDisplays();
+    for (uint8_t i = 0; i < numDisplays; i++) {
+        const char* appId = AppManager::getAppId(i);
+        uint32_t uptime = AppManager::getAppUptime(i) / 1000; // Convert ms to seconds
 
         JsonObject d = disps.add<JsonObject>();
         d["id"] = i;
@@ -207,6 +199,7 @@ String SimpleHttpServer::generateDashboardHTML() {
             border: 3px solid #e5e7eb;
             cursor: pointer;
             transition: all 0.2s;
+            position: relative;
         }
         .display-card:hover { transform: translateY(-2px); }
         .display-card.selected { border-color: #667eea; box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.2); }
@@ -251,6 +244,7 @@ String SimpleHttpServer::generateDashboardHTML() {
         }
         .message.success { background: #d1fae5; color: #065f46; display: block; }
         .message.error { background: #fee2e2; color: #991b1b; display: block; }
+        .message.info { background: #dbeafe; color: #1e40af; display: block; }
         .upload-section {
             margin-top: 32px;
             padding: 24px;
@@ -324,6 +318,40 @@ String SimpleHttpServer::generateDashboardHTML() {
             height: 8px;
             margin-top: 8px;
         }
+        .loading-spinner {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 3px solid rgba(255,255,255,.3);
+            border-radius: 50%;
+            border-top-color: white;
+            animation: spin 0.8s linear infinite;
+            margin-left: 8px;
+            vertical-align: middle;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .display-card.loading {
+            opacity: 0.6;
+            pointer-events: none;
+        }
+        .display-card.loading::after {
+            content: 'Loading...';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(102, 126, 234, 0.95);
+            color: white;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-weight: 600;
+        }
+        .app-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
     </style>
 </head>
 <body>
@@ -391,20 +419,50 @@ String SimpleHttpServer::generateDashboardHTML() {
         }
 
         function loadApp(appId) {
+            // Show loading state
+            showMessage('Loading ' + appId + ' on Display ' + selectedDisplay + '...', 'info');
+            setDisplayLoading(selectedDisplay, true);
+            disableAllAppButtons(true);
+
             const url = '/api/load?display=' + selectedDisplay + '&app=' + appId;
             fetch(url, { method: 'POST' })
                 .then(function(res) { return res.json(); })
                 .then(function(data) {
                     if (data.success) {
-                        showMessage('Loaded ' + appId + ' on Display ' + selectedDisplay, 'success');
-                        loadStatus();
+                        showMessage('✓ Loaded ' + appId + ' on Display ' + selectedDisplay, 'success');
                     } else {
-                        showMessage('Failed to load app', 'error');
+                        showMessage('✗ Failed to load app', 'error');
                     }
                 })
                 .catch(function(err) {
-                    showMessage('Error: ' + err.message, 'error');
+                    showMessage('✗ Error: ' + err.message, 'error');
+                })
+                .finally(function() {
+                    // Remove loading state and refresh status
+                    setTimeout(function() {
+                        setDisplayLoading(selectedDisplay, false);
+                        disableAllAppButtons(false);
+                        loadStatus();
+                    }, 500);
                 });
+        }
+
+        function setDisplayLoading(displayId, isLoading) {
+            const cards = document.querySelectorAll('.display-card');
+            if (cards[displayId]) {
+                if (isLoading) {
+                    cards[displayId].classList.add('loading');
+                } else {
+                    cards[displayId].classList.remove('loading');
+                }
+            }
+        }
+
+        function disableAllAppButtons(disabled) {
+            const buttons = document.querySelectorAll('.app-btn');
+            buttons.forEach(function(btn) {
+                btn.disabled = disabled;
+            });
         }
 
         function loadStatus() {
@@ -437,7 +495,10 @@ String SimpleHttpServer::generateDashboardHTML() {
                     let html = '';
                     for (let i = 0; i < data.apps.length; i++) {
                         const app = data.apps[i];
-                        html += '<button class="app-btn" onclick="loadApp(\'' + app + '\')">' + app + '</button>';
+                        // Handle both old format (string) and new format (object)
+                        const appId = typeof app === 'string' ? app : app.id;
+                        const appName = typeof app === 'string' ? app : app.name;
+                        html += '<button class="app-btn" onclick="loadApp(\'' + appId + '\')">' + appName + '</button>';
                     }
                     appsDiv.innerHTML = html;
                 });

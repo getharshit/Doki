@@ -59,63 +59,95 @@ struct AppRegistration {
 };
 
 /**
+ * @brief Display state - tracks what app is running on each display
+ */
+struct DisplayState {
+    uint8_t displayId;           // Display hardware ID (0, 1, 2)
+    DokiApp* currentApp;         // Currently running app
+    std::string currentAppId;    // Current app ID
+    lv_disp_t* lvglDisplay;      // LVGL display handle
+
+    DisplayState() : displayId(0), currentApp(nullptr), currentAppId(""), lvglDisplay(nullptr) {}
+    DisplayState(uint8_t id, lv_disp_t* disp)
+        : displayId(id), currentApp(nullptr), currentAppId(""), lvglDisplay(disp) {}
+};
+
+/**
  * @brief App Manager - Central controller for Doki OS apps
- * 
- * Singleton class that manages the entire app lifecycle
+ *
+ * Singleton class that manages the entire app lifecycle across multiple displays
  */
 class AppManager {
 public:
     /**
+     * @brief Initialize AppManager with display configuration
+     *
+     * @param numDisplays Number of displays (1-3)
+     * @param displays Array of LVGL display pointers
+     * @return true if initialized successfully
+     *
+     * Must be called once in setup() before any other AppManager operations.
+     *
+     * Example:
+     *   lv_disp_t* displays[2] = {disp0, disp1};
+     *   AppManager::init(2, displays);
+     */
+    static bool init(uint8_t numDisplays, lv_disp_t** displays);
+
+    /**
      * @brief Register an app
-     * 
+     *
      * @param id App unique identifier (e.g., "clock", "weather")
      * @param name App display name (e.g., "Clock", "Weather")
      * @param factory Factory function that creates the app
      * @param description Optional description
      * @return true if registered successfully
-     * 
+     *
      * Must be called before loadApp(). Typically done in setup().
-     * 
+     *
      * Example:
-     *   AppManager::registerApp("clock", "Clock App", 
+     *   AppManager::registerApp("clock", "Clock App",
      *       []() { return new ClockApp(); },
      *       "Displays current time");
      */
-    static bool registerApp(const char* id, 
+    static bool registerApp(const char* id,
                            const char* name,
                            AppFactory factory,
                            const char* description = "");
-    
+
     /**
-     * @brief Load an app
-     * 
+     * @brief Load an app on a specific display
+     *
+     * @param displayId Display ID (0, 1, 2)
      * @param appId App ID to load
      * @return true if app loaded successfully
-     * 
-     * If another app is running, it will be unloaded first.
+     *
+     * If another app is running on this display, it will be unloaded first.
      * Calls: factory() → onCreate() → onStart()
-     * 
+     *
      * Example:
-     *   AppManager::loadApp("clock");
+     *   AppManager::loadApp(0, "clock");  // Load clock on display 0
+     *   AppManager::loadApp(1, "weather"); // Load weather on display 1
      */
-    static bool loadApp(const char* appId);
-    
+    static bool loadApp(uint8_t displayId, const char* appId);
+
     /**
-     * @brief Unload current app
-     * 
+     * @brief Unload app from a specific display
+     *
+     * @param displayId Display ID (0, 1, 2)
      * @return true if app unloaded successfully
-     * 
+     *
      * Calls: onPause() → onDestroy()
      * Also stops all app tasks and checks for memory leaks
      */
-    static bool unloadCurrentApp();
-    
+    static bool unloadApp(uint8_t displayId);
+
     /**
-     * @brief Update current app
-     * 
-     * Call this in loop() to update the running app.
-     * Calls the app's onUpdate() method.
-     * 
+     * @brief Update all running apps
+     *
+     * Call this in loop() to update all running apps across all displays.
+     * Calls each app's onUpdate() method.
+     *
      * Example:
      *   void loop() {
      *       AppManager::update();
@@ -124,81 +156,108 @@ public:
     static void update();
     
     /**
-     * @brief Get current running app
-     * 
-     * @return Pointer to current app (nullptr if none)
+     * @brief Get app running on a specific display
+     *
+     * @param displayId Display ID (0, 1, 2)
+     * @return Pointer to app (nullptr if none)
      */
-    static DokiApp* getCurrentApp();
-    
+    static DokiApp* getApp(uint8_t displayId);
+
     /**
-     * @brief Get current app ID
-     * 
-     * @return Current app ID (empty string if none)
+     * @brief Get app ID running on a specific display
+     *
+     * @param displayId Display ID (0, 1, 2)
+     * @return App ID (empty string if none)
      */
-    static const char* getCurrentAppId();
-    
+    static const char* getAppId(uint8_t displayId);
+
     /**
      * @brief Check if an app is registered
-     * 
+     *
      * @param appId App ID to check
      * @return true if app is registered
      */
     static bool isAppRegistered(const char* appId);
-    
+
     /**
-     * @brief Check if an app is currently running
-     * 
-     * @return true if any app is running
+     * @brief Check if any app is running on a display
+     *
+     * @param displayId Display ID (0, 1, 2)
+     * @return true if app is running on this display
      */
-    static bool isAppRunning();
-    
+    static bool isAppRunning(uint8_t displayId);
+
     /**
      * @brief Get list of all registered apps
-     * 
+     *
      * @return Vector of app registrations
      */
     static std::vector<AppRegistration> getRegisteredApps();
-    
+
     /**
      * @brief Get app registration info
-     * 
+     *
      * @param appId App ID
      * @return App registration (empty if not found)
      */
     static AppRegistration getAppInfo(const char* appId);
-    
+
     /**
-     * @brief Print app registry
-     * 
-     * Lists all registered apps with their info
+     * @brief Print app registry and display status
+     *
+     * Lists all registered apps and what's running on each display
      */
-    static void printAppRegistry();
-    
+    static void printStatus();
+
     /**
-     * @brief Get app uptime
-     * 
-     * @return Current app uptime in milliseconds (0 if no app running)
+     * @brief Get app uptime on a specific display
+     *
+     * @param displayId Display ID (0, 1, 2)
+     * @return App uptime in milliseconds (0 if no app running)
      */
-    static uint32_t getAppUptime();
-    
+    static uint32_t getAppUptime(uint8_t displayId);
+
+    /**
+     * @brief Get number of displays
+     *
+     * @return Number of configured displays
+     */
+    static uint8_t getNumDisplays();
+
+    /**
+     * @brief Get the display ID for a given app instance
+     *
+     * @param app Pointer to the app
+     * @return Display ID (0, 1, 2) or 255 if not found
+     */
+    static uint8_t getDisplayIdForApp(DokiApp* app);
+
     /**
      * @brief Unregister all apps (for testing/cleanup)
      */
     static void clearRegistry();
 
 private:
+    // Initialization flag
+    static bool _initialized;
+
+    // Number of displays
+    static uint8_t _numDisplays;
+
+    // Display states (one per display)
+    static std::vector<DisplayState> _displays;
+
     // App registry (maps app ID to registration info)
     static std::map<std::string, AppRegistration> _registry;
-    
-    // Current running app
-    static DokiApp* _currentApp;
-    static std::string _currentAppId;
-    
+
     // Helper: Find app registration
     static AppRegistration* _findRegistration(const char* appId);
-    
-    // Helper: Perform full app cleanup
-    static void _cleanupApp(DokiApp* app, const char* appId);
+
+    // Helper: Perform full app cleanup (after app deletion)
+    static void _cleanupApp(uint8_t displayId, const char* appId);
+
+    // Helper: Validate display ID
+    static bool _isValidDisplay(uint8_t displayId);
 };
 
 } // namespace Doki

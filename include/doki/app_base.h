@@ -19,6 +19,7 @@
 
 #include <Arduino.h>
 #include <lvgl.h>
+#include <ArduinoJson.h>
 
 namespace Doki {
 
@@ -127,17 +128,53 @@ public:
     
     /**
      * @brief Cleanup before app unload
-     * 
+     *
      * Called before app is unloaded. Use this to:
      * - Free allocated memory
      * - Close files/connections
      * - Unsubscribe from events
      * - Save persistent data
-     * 
+     *
      * Note: LVGL automatically cleans up UI elements created on screen
      */
     virtual void onDestroy() = 0;
-    
+
+    // ========================================
+    // State Persistence (optional hooks)
+    // ========================================
+
+    /**
+     * @brief Save app state (optional hook)
+     *
+     * Override this to save app state when the app is paused or destroyed.
+     * The state will be automatically saved to NVS.
+     *
+     * @param state JSON document to populate with state data
+     *
+     * Example:
+     *   void onSaveState(JsonDocument& state) override {
+     *       state["lastUpdate"] = lastUpdateTime;
+     *       state["temperature"] = currentTemp;
+     *   }
+     */
+    virtual void onSaveState(JsonDocument& state) {}
+
+    /**
+     * @brief Restore app state (optional hook)
+     *
+     * Override this to restore app state when the app is created.
+     * Called after onCreate() if saved state exists.
+     *
+     * @param state JSON document containing saved state data
+     *
+     * Example:
+     *   void onRestoreState(const JsonDocument& state) override {
+     *       lastUpdateTime = state["lastUpdate"];
+     *       currentTemp = state["temperature"];
+     *   }
+     */
+    virtual void onRestoreState(const JsonDocument& state) {}
+
     // ========================================
     // App Information (getters)
     // ========================================
@@ -171,6 +208,30 @@ public:
      * @return true if app is in STARTED state
      */
     bool isRunning() const { return _state == AppState::STARTED; }
+
+    /**
+     * @brief Set the LVGL display for this app
+     * @param disp LVGL display handle
+     *
+     * Called by AppManager before onCreate(). Sets the display context
+     * so the app renders on the correct display.
+     */
+    void setDisplay(lv_disp_t* disp);
+
+    /**
+     * @brief Get the LVGL display for this app
+     * @return LVGL display handle
+     */
+    lv_disp_t* getDisplay() const { return _display; }
+
+    /**
+     * @brief Get the display ID this app is running on
+     * @return Display ID (0, 1, 2) or 255 if not assigned
+     *
+     * Helper method for apps that need to know their display ID
+     * (e.g., for loading display-specific media files)
+     */
+    uint8_t getDisplayId() const;
 
 protected:
     // ========================================
@@ -207,11 +268,14 @@ private:
     // App identification
     const char* _id;              // Unique ID (e.g., "clock")
     const char* _name;            // Display name (e.g., "Clock")
-    
+
+    // Display assignment
+    lv_disp_t* _display;          // LVGL display this app renders on
+
     // Lifecycle tracking
     AppState _state;              // Current state
     uint32_t _startTime;          // When onStart() was called
-    
+
     // Internal lifecycle management (called by AppManager)
     friend class AppManager;
 };

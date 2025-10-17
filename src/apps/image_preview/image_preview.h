@@ -16,16 +16,17 @@ class ImagePreviewApp : public Doki::DokiApp {
 public:
     /**
      * @brief Constructor
-     * @param displayId Display ID (0 or 1) to load image for
      */
-    ImagePreviewApp(uint8_t displayId)
+    ImagePreviewApp()
         : DokiApp("image", "Image Preview"),
-          _displayId(displayId),
           _image(nullptr),
           _placeholderLabel(nullptr) {}
 
     void onCreate() override {
         log("Creating Image Preview App...");
+
+        // Get display ID for this app
+        uint8_t displayId = getDisplayId();
 
         // Get screen reference
         lv_obj_t* screen = getScreen();
@@ -34,11 +35,11 @@ public:
         lv_obj_set_style_bg_color(screen, lv_color_hex(0x000000), 0);
 
         // Check for PNG image first
-        Doki::MediaInfo info = Doki::MediaService::getMediaInfo(_displayId, Doki::MediaType::IMAGE_PNG);
+        Doki::MediaInfo info = Doki::MediaService::getMediaInfo(displayId, Doki::MediaType::IMAGE_PNG);
 
         // If no PNG, check for JPEG
         if (!info.exists) {
-            info = Doki::MediaService::getMediaInfo(_displayId, Doki::MediaType::IMAGE_JPEG);
+            info = Doki::MediaService::getMediaInfo(displayId, Doki::MediaType::IMAGE_JPEG);
         }
 
         if (!info.exists) {
@@ -107,7 +108,6 @@ public:
     }
 
 private:
-    uint8_t _displayId;              ///< Display ID (0 or 1)
     lv_obj_t* _image;                ///< LVGL image object
     lv_obj_t* _placeholderLabel;     ///< Placeholder text when no image
 

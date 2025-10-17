@@ -4,6 +4,7 @@
  */
 
 #include "doki/app_base.h"
+#include "doki/app_manager.h"
 
 namespace Doki {
 
@@ -14,6 +15,7 @@ namespace Doki {
 DokiApp::DokiApp(const char* id, const char* name)
     : _id(id)
     , _name(name)
+    , _display(nullptr)
     , _state(AppState::IDLE)
     , _startTime(0)
 {
@@ -53,6 +55,17 @@ void DokiApp::_markStarted() {
 // Public Methods (App Info)
 // ========================================
 
+void DokiApp::setDisplay(lv_disp_t* disp) {
+    if (!disp) {
+        Serial.printf("[DokiApp:%s] Error: Cannot set null display\n", _id);
+        return;
+    }
+    _display = disp;
+    // Set this display as the default for LVGL operations
+    lv_disp_set_default(disp);
+    Serial.printf("[DokiApp:%s] Display assigned\n", _id);
+}
+
 uint32_t DokiApp::getUptime() const {
     if (_state != AppState::STARTED || _startTime == 0) {
         return 0;
@@ -60,13 +73,30 @@ uint32_t DokiApp::getUptime() const {
     return millis() - _startTime;
 }
 
+uint8_t DokiApp::getDisplayId() const {
+    // Call AppManager to find which display this app is on
+    return AppManager::getDisplayIdForApp(const_cast<DokiApp*>(this));
+}
+
 // ========================================
 // Protected Helper Methods
 // ========================================
 
 void DokiApp::clearScreen() {
-    // Clean all children from the active screen
-    lv_obj_clean(lv_scr_act());
+    if (!_display) {
+        Serial.printf("[DokiApp:%s] Error: No display assigned, cannot clear screen\n", _id);
+        return;
+    }
+
+    // Get the active screen for this specific display
+    lv_obj_t* screen = lv_disp_get_scr_act(_display);
+    if (!screen) {
+        Serial.printf("[DokiApp:%s] Error: No active screen found\n", _id);
+        return;
+    }
+
+    // Clean all children from the screen
+    lv_obj_clean(screen);
     Serial.printf("[DokiApp:%s] Screen cleared\n", _id);
 }
 

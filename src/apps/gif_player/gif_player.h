@@ -16,16 +16,17 @@ class GifPlayerApp : public Doki::DokiApp {
 public:
     /**
      * @brief Constructor
-     * @param displayId Display ID (0 or 1) to load GIF for
      */
-    GifPlayerApp(uint8_t displayId)
+    GifPlayerApp()
         : DokiApp("gif", "GIF Player"),
-          _displayId(displayId),
           _gifImage(nullptr),
           _placeholderLabel(nullptr) {}
 
     void onCreate() override {
         log("Creating GIF Player App...");
+
+        // Get display ID for this app
+        uint8_t displayId = getDisplayId();
 
         // Get screen reference
         lv_obj_t* screen = getScreen();
@@ -34,7 +35,7 @@ public:
         lv_obj_set_style_bg_color(screen, lv_color_hex(0x000000), 0);
 
         // Check if GIF exists for this display
-        Doki::MediaInfo info = Doki::MediaService::getMediaInfo(_displayId, Doki::MediaType::GIF);
+        Doki::MediaInfo info = Doki::MediaService::getMediaInfo(displayId, Doki::MediaType::GIF);
 
         if (!info.exists) {
             showPlaceholder("No GIF uploaded\n\nUpload via dashboard");
@@ -99,7 +100,6 @@ public:
     }
 
 private:
-    uint8_t _displayId;              ///< Display ID (0 or 1)
     lv_obj_t* _gifImage;             ///< LVGL GIF object
     lv_obj_t* _placeholderLabel;     ///< Placeholder text when no GIF
 
