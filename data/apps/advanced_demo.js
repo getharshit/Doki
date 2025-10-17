@@ -29,12 +29,14 @@ var wsStatusLabel = null;
 var lastClockUpdate = 0;
 var lastWeatherUpdate = 0;
 var lastDisplaySync = 0;
+var lastWsPoll = 0;
 var startTime = 0;
 
 // Update intervals (in milliseconds)
 var CLOCK_INTERVAL = 1000;
 var WEATHER_INTERVAL = 300000;
 var DISPLAY_SYNC_INTERVAL = 5000;
+var WS_POLL_INTERVAL = 20;  // Poll WebSocket every 20ms for responsive connection
 
 // Initialization delays (prevents watchdog timeout)
 var MQTT_INIT_DELAY = 3000;      // Wait 3s before MQTT
@@ -63,7 +65,7 @@ var MQTT_PORT = 1883;
 var MQTT_TOPIC = "doki/demo/#";
 var WEATHER_API_KEY = "3183db8ec2fe4abfa2c133226251310";
 var WEATHER_LOCATION = "Mumbai";
-var WS_URL = "wss://echo.websocket.org/";
+var WS_URL = "wss://echo-websocket.fly.dev/";  // Modern, reliable echo server
 
 // ============================================================================
 // LIFECYCLE METHODS
@@ -149,6 +151,12 @@ function onUpdate() {
     if (!wsInitialized && elapsed > WS_INIT_DELAY) {
         connectWebSocket();
         wsInitialized = true;
+    }
+
+    // === WEBSOCKET: Poll frequently (20ms) to process connection/messages ===
+    if (wsInitialized && (now - lastWsPoll >= WS_POLL_INTERVAL)) {
+        pollWebSocket();
+        lastWsPoll = now;
     }
 }
 
@@ -424,26 +432,50 @@ function connectWebSocket() {
         setLabelColor(wsStatusLabel, 0xffaa00);
     }
 
-    var success = wsConnect(WS_URL);
+    // IMPORTANT: wsConnect() returns true = "connection initiated", NOT "connected"!
+    // Actual connection status comes from wsIsConnected() asynchronously
+    wsConnect(WS_URL);
+    log("WebSocket connection initiated...");
+}
 
-    if (success) {
+function pollWebSocket() {
+    // Check actual connection status (asynchronously updated by C++ layer)
+    var isActuallyConnected = wsIsConnected();
+
+    // Connection established event
+    if (isActuallyConnected && !wsConnected) {
         wsConnected = true;
-        log("WebSocket connected!");
+        log("✓ WebSocket connected!");
 
         if (wsStatusLabel !== null) {
             updateLabel(wsStatusLabel, "Connected");
             setLabelColor(wsStatusLabel, 0x00ff88);
         }
 
+        // Send test message
         wsSend("Hello from D" + myDisplayId);
-    } else {
+        log("→ Sent: Hello from D" + myDisplayId);
+    }
+
+    // Connection lost event
+    if (!isActuallyConnected && wsConnected) {
         wsConnected = false;
-        log("WebSocket failed (not supported or error)");
+        log("✗ WebSocket disconnected");
 
         if (wsStatusLabel !== null) {
-            updateLabel(wsStatusLabel, "Not supported");
-            setLabelColor(wsStatusLabel, 0x888888);
+            updateLabel(wsStatusLabel, "Disconnected");
+            setLabelColor(wsStatusLabel, 0xff4444);
         }
+    }
+
+    // Poll for incoming messages (calls loop() internally)
+    if (wsConnected) {
+        wsOnMessage(function(msg) {
+            log("← WebSocket received: " + msg);
+        });
+    } else {
+        // Still call wsOnMessage() to process connection handshake via loop()
+        wsOnMessage(null);
     }
 }
 

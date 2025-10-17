@@ -23,8 +23,9 @@ var testCountLabel = null;
 // State
 var wsConnected = false;
 var testServers = [
-    "wss://echo.websocket.org/",            // Secure WebSocket (wss://) on port 443
-    "ws://ws.postman-echo.com/raw"          // Fallback non-secure server
+    "wss://socketsbay.com/wss/v2/1/demo/",   // Testing focused echo server
+    "wss://echo-websocket.fly.dev/",         // Modern echo server
+    "wss://ws.ifelse.io/"                    // Community recommended
 ];
 var currentServerIndex = 0;
 var currentServer = testServers[0];
@@ -32,6 +33,16 @@ var connectionAttempts = 0;
 var messagesReceived = 0;
 var messagesSent = 0;
 var lastUpdate = 0;
+
+// Message handler function (defined once, called repeatedly)
+var messageHandler = function(msg) {
+    messagesReceived++;
+    logMessage("← Received: " + msg);
+};
+
+// Connection state tracking
+var connectionInitiated = false;
+var connectionCheckStartTime = 0;
 
 // Test sequence
 var testPhase = 0;
@@ -65,17 +76,36 @@ function onUpdate() {
     var now = millis();
     var elapsed = now - testStartTime;
 
-    // Update every 100ms
-    if (now - lastUpdate < 100) {
+    // Update every 20ms for responsive WebSocket connection/messaging
+    if (now - lastUpdate < 20) {
         return;
     }
     lastUpdate = now;
+
+    // CRITICAL: Always call wsOnMessage() to process connection/messages via loop()
+    // This MUST be called even when not connected - it drives the SSL handshake!
+    wsOnMessage(wsConnected ? messageHandler : null);
+
+    // Update connection status after calling wsOnMessage (which calls loop())
+    var isActuallyConnected = wsIsConnected();
+
+    // Update local state if connection status changed
+    if (isActuallyConnected && !wsConnected) {
+        wsConnected = true;
+        logMessage("✓ Connection established!");
+        updateStatus("Connected", 0x10b981);
+    } else if (!isActuallyConnected && wsConnected) {
+        wsConnected = false;
+        logMessage("✗ Connection lost");
+        updateStatus("Disconnected", 0x64748b);
+    }
 
     // Automatic test sequence
     if (autoTestEnabled) {
         if (testPhase === 0 && elapsed > 2000) {
             // Phase 0: Wait 2s, then connect
             testPhase = 1;
+            connectionCheckStartTime = now;
             attemptConnection(currentServer);
         }
         else if (testPhase === 1 && wsConnected && elapsed > 5000) {
@@ -247,23 +277,9 @@ function attemptConnection(url) {
     updateStatus("Connecting...", 0xfbbf24);
     updateServer(url);
 
-    var success = wsConnect(url);
-
-    if (success) {
-        wsConnected = true;
-        logMessage("✓ Connected successfully!");
-        updateStatus("Connected", 0x10b981);
-
-        // Setup message handler
-        wsOnMessage(function(msg) {
-            messagesReceived++;
-            logMessage("← Received: " + msg);
-        });
-    } else {
-        wsConnected = false;
-        logMessage("✗ Connection failed");
-        updateStatus("Failed", 0xef4444);
-    }
+    // wsConnect returns true if initiation succeeded (NOT if connected)
+    // Actual connection status will be updated asynchronously via wsIsConnected()
+    wsConnect(url);
 }
 
 function sendTestMessage(message) {

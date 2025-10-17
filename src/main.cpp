@@ -730,12 +730,13 @@ void setup() {
             };
 
             TestServer testServers[] = {
-                {"echo.websocket.org", 443, "/", true},  // WSS on 443
-                {"ws.postman-echo.com", 80, "/raw", false}  // Try non-secure fallback
+                {"socketsbay.com", 443, "/wss/v2/1/demo/", true},  // WSS - Testing focused
+                {"echo-websocket.fly.dev", 443, "/", true},  // WSS - Modern echo server
+                {"ws.ifelse.io", 443, "/", true}  // WSS - Community recommended
             };
 
             bool testSuccess = false;
-            for (int i = 0; i < 2; i++) {
+            for (int i = 0; i < 3; i++) {
                 Serial.printf("\n[WS C++ Test] Attempt #%d - Server: %s:%d%s (%s)\n",
                     i+1, testServers[i].host, testServers[i].port, testServers[i].path,
                     testServers[i].useSSL ? "WSS/SSL" : "WS/plain");

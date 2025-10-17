@@ -40,23 +40,46 @@ static void ntpSyncTask(void* parameter) {
     // Wait a bit for WiFi to stabilize
     vTaskDelay(pdMS_TO_TICKS(2000));
 
+    // Suppress WiFiUdp ESP-IDF errors to avoid console spam on transient failures
+    esp_log_level_set("WiFiUdp", ESP_LOG_ERROR);
+
     // Perform initial sync (this will block, but only in background task)
     Serial.println("[JSEngine NTP] Performing initial sync...");
     if (globalTimeClient && globalTimeClient->forceUpdate()) {
         ntpSynced = true;
         Serial.println("[JSEngine NTP] ✓ Time synced successfully");
+        Serial.println("[JSEngine NTP] Will update every 1 hour");
     } else {
-        Serial.println("[JSEngine NTP] ✗ Initial sync failed, will retry");
+        Serial.println("[JSEngine NTP] ✗ Initial sync failed, will retry in 60s");
     }
 
-    // Keep updating every 60 seconds
-    while (true) {
-        vTaskDelay(pdMS_TO_TICKS(60000));  // Wait 60 seconds
+    // Failure tracking for exponential backoff
+    int failureCount = 0;
+    const int MAX_FAILURES = 5;
 
+    // Keep updating every 1 hour (standard for embedded NTP clients)
+    // ESP32 RTC is accurate enough that hourly sync is more than sufficient
+    while (true) {
+        // Wait interval: 1 hour normally, 60s if initial sync failed
+        if (ntpSynced) {
+            vTaskDelay(pdMS_TO_TICKS(3600000));  // 1 hour (3600000 ms)
+        } else {
+            vTaskDelay(pdMS_TO_TICKS(60000));  // 60 seconds (retry faster if not synced)
+        }
+
+        // Attempt update
         if (globalTimeClient && globalTimeClient->update()) {
+            failureCount = 0;  // Reset on success
             if (!ntpSynced) {
                 ntpSynced = true;
                 Serial.println("[JSEngine NTP] ✓ Time synced successfully");
+            }
+            // Silent success after first sync (avoid console spam)
+        } else {
+            // Only log failures if not yet synced or if many consecutive failures
+            failureCount++;
+            if (!ntpSynced || failureCount >= MAX_FAILURES) {
+                Serial.printf("[JSEngine NTP] Update failed (attempt %d), will retry\n", failureCount);
             }
         }
     }
@@ -402,6 +425,9 @@ void JSEngine::registerDokiAPIs(void* ctx) {
     // WebSocket
     duk_push_c_function(duk_ctx, _js_wsConnect, 1);
     duk_put_global_string(duk_ctx, "wsConnect");
+
+    duk_push_c_function(duk_ctx, _js_wsIsConnected, 0);
+    duk_put_global_string(duk_ctx, "wsIsConnected");
 
     duk_push_c_function(duk_ctx, _js_wsSend, 1);
     duk_put_global_string(duk_ctx, "wsSend");
@@ -1230,23 +1256,20 @@ duk_ret_t JSEngine::_js_mqttDisconnect(duk_context* ctx) {
 #ifdef ENABLE_WEBSOCKET_SUPPORT
 static WebSocketsClient* wsClient = nullptr;
 static duk_context* wsDukContext = nullptr;
-static bool wsConnected = false;
 
 // Links2004 library uses event-driven callbacks
 static void wsEventCallback(WStype_t type, uint8_t* payload, size_t length) {
     switch(type) {
         case WStype_DISCONNECTED:
-            Serial.println("[WebSocket] Disconnected");
-            wsConnected = false;
+            Serial.println("[WebSocket] ✗ Disconnected");
             break;
 
         case WStype_CONNECTED:
-            Serial.printf("[WebSocket] Connected to: %s\n", payload);
-            wsConnected = true;
+            Serial.printf("[WebSocket] ✓ Connected to: %s\n", payload);
             break;
 
         case WStype_TEXT:
-            Serial.printf("[WebSocket] Message received: %s\n", payload);
+            Serial.printf("[WebSocket] ← Message received: %s\n", payload);
 
             // Store message in Duktape stash
             if (wsDukContext) {
@@ -1269,8 +1292,7 @@ static void wsEventCallback(WStype_t type, uint8_t* payload, size_t length) {
             break;
 
         case WStype_ERROR:
-            Serial.printf("[WebSocket] Error: %s\n", payload);
-            wsConnected = false;
+            Serial.printf("[WebSocket] ⚠️ ERROR: %s\n", payload);
             break;
 
         default:
@@ -1332,9 +1354,17 @@ duk_ret_t JSEngine::_js_wsConnect(duk_context* ctx) {
         Serial.println("[WS] Creating new WebSocketsClient...");
         wsClient = new WebSocketsClient();
         Serial.printf("[WS] Client created at: %p\n", (void*)wsClient);
+
+        // CRITICAL FIX #1: Set short reconnect interval (default is ~5000ms!)
+        // This allows quick retries if first connection fails
+        wsClient->setReconnectInterval(500);  // Retry every 500ms
+        Serial.println("[WS] Set reconnect interval to 500ms");
     } else {
+        // CRITICAL FIX #2: Disconnect cleanly before reconnecting
+        // This resets the reconnection timer and cleans up old state
         Serial.println("[WS] Disconnecting existing connection...");
         wsClient->disconnect();
+        delay(100);  // Brief delay for cleanup
     }
 
     wsDukContext = ctx;
@@ -1343,7 +1373,7 @@ duk_ret_t JSEngine::_js_wsConnect(duk_context* ctx) {
     Serial.println("[WS] Setting up event callback...");
     wsClient->onEvent(wsEventCallback);
 
-    // Connect using Links2004 API (beginSSL for wss://, begin for ws://)
+    // Connect using Links2004 API (library copies strings internally)
     if (useSSL) {
         Serial.printf("[WS] Calling beginSSL(%s, %d, %s) for secure connection...\n",
             host.c_str(), port, path.c_str());
@@ -1354,22 +1384,31 @@ duk_ret_t JSEngine::_js_wsConnect(duk_context* ctx) {
         wsClient->begin(host.c_str(), port, path.c_str());
     }
 
-    // Wait a moment for connection
-    Serial.println("[WS] Waiting for connection (2 sec)...");
-    unsigned long startTime = millis();
-    while (millis() - startTime < 2000) {
-        wsClient->loop();
-        delay(50);
-        if (wsConnected) break;
-    }
-
-    Serial.printf("[WS] Connection result: %s\n", wsConnected ? "SUCCESS" : "FAILED");
+    // NON-BLOCKING: Connection happens asynchronously
+    // JavaScript must call wsOnMessage() frequently (10-20ms) to process events via loop()
+    // The wsEventCallback will update wsConnected when connection succeeds
+    Serial.println("[WS] Connection initiated (non-blocking)");
+    Serial.println("[WS] Call wsOnMessage() every 10-20ms to process connection");
     Serial.println("=================================================");
 
-    duk_push_boolean(ctx, wsConnected);
+    // Return true to indicate connection was initiated
+    duk_push_boolean(ctx, true);
     return 1;
 #else
     Serial.println("[WebSocket] Not supported - enable ENABLE_WEBSOCKET_SUPPORT");
+    duk_push_boolean(ctx, false);
+    return 1;
+#endif
+}
+
+duk_ret_t JSEngine::_js_wsIsConnected(duk_context* ctx) {
+#ifdef ENABLE_WEBSOCKET_SUPPORT
+    // CRITICAL FIX #4: Use library's isConnected() method instead of manual flag
+    // This is the authoritative source - checks _client.status == WSC_CONNECTED
+    bool connected = wsClient ? wsClient->isConnected() : false;
+    duk_push_boolean(ctx, connected);
+    return 1;
+#else
     duk_push_boolean(ctx, false);
     return 1;
 #endif
@@ -1379,8 +1418,8 @@ duk_ret_t JSEngine::_js_wsSend(duk_context* ctx) {
 #ifdef ENABLE_WEBSOCKET_SUPPORT
     const char* message = duk_to_string(ctx, 0);
 
-    if (!wsClient || !wsConnected) {
-        Serial.println("[WebSocket] Not connected");
+    if (!wsClient || !wsClient->isConnected()) {
+        Serial.println("[WebSocket] Not connected - cannot send");
         duk_push_boolean(ctx, false);
         return 1;
     }
@@ -1388,7 +1427,7 @@ duk_ret_t JSEngine::_js_wsSend(duk_context* ctx) {
     // Links2004 library: sendTXT() for text messages
     bool success = wsClient->sendTXT(message);
 
-    Serial.printf("[WebSocket] Sent (%s): %s\n", success ? "OK" : "FAILED", message);
+    Serial.printf("[WebSocket] → Sent (%s): %s\n", success ? "✓" : "✗", message);
 
     duk_push_boolean(ctx, success);
     return 1;
@@ -1400,11 +1439,60 @@ duk_ret_t JSEngine::_js_wsSend(duk_context* ctx) {
 
 duk_ret_t JSEngine::_js_wsOnMessage(duk_context* ctx) {
 #ifdef ENABLE_WEBSOCKET_SUPPORT
-    // Links2004 library: Must call loop() to process events
-    // This triggers the event callback which stores messages in stash
+    // Get the callback function (if provided)
+    bool hasCallback = duk_is_function(ctx, 0);
+
+    // IMPORTANT: Call loop() to process WebSocket events (connection, messages, etc.)
+    // This must be called frequently (every 10-20ms) for reliable connections
+    // Runs in JavaScript thread - thread-safe!
     if (wsClient) {
         wsClient->loop();
     }
+
+    // If no callback provided, we still called loop() above (for connection processing)
+    if (!hasCallback) {
+        return 0;
+    }
+
+    // Retrieve messages from stash and invoke callback for each
+    duk_push_global_stash(ctx);
+    duk_get_prop_string(ctx, -1, "__ws_messages");
+
+    // Check if messages array exists
+    if (duk_is_array(ctx, -1)) {
+        duk_size_t messageCount = duk_get_length(ctx, -1);
+
+        // Process all messages
+        for (duk_size_t i = 0; i < messageCount; i++) {
+            // Get message at index i
+            duk_get_prop_index(ctx, -1, i);
+
+            if (duk_is_string(ctx, -1)) {
+                const char* message = duk_get_string(ctx, -1);
+                Serial.printf("[WebSocket] Delivering message to JS: %s\n", message);
+
+                // Invoke the callback: callback(message)
+                duk_dup(ctx, 0);        // Push callback function
+                duk_dup(ctx, -2);       // Push message as argument
+
+                if (duk_pcall(ctx, 1) != 0) {
+                    Serial.printf("[WebSocket] Error in callback: %s\n", duk_safe_to_string(ctx, -1));
+                }
+                duk_pop(ctx);  // Pop result
+            }
+
+            duk_pop(ctx);  // Pop message
+        }
+
+        // Clear the messages array after processing
+        duk_pop(ctx);  // Pop messages array
+        duk_push_array(ctx);  // Push new empty array
+        duk_put_prop_string(ctx, -2, "__ws_messages");  // Store empty array
+    } else {
+        duk_pop(ctx);  // Pop undefined/non-array
+    }
+
+    duk_pop(ctx);  // Pop stash
 #endif
     return 0;
 }
@@ -1415,8 +1503,7 @@ duk_ret_t JSEngine::_js_wsDisconnect(duk_context* ctx) {
         wsClient->disconnect();
         delete wsClient;
         wsClient = nullptr;
-        wsConnected = false;
-        Serial.println("[WebSocket] Disconnected");
+        Serial.println("[WebSocket] Disconnected and cleaned up");
     }
 #endif
     return 0;

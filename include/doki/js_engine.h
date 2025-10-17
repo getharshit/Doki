@@ -250,6 +250,7 @@ private:
 
     // WebSocket
     static duk_ret_t _js_wsConnect(duk_context* ctx);
+    static duk_ret_t _js_wsIsConnected(duk_context* ctx);
     static duk_ret_t _js_wsSend(duk_context* ctx);
     static duk_ret_t _js_wsOnMessage(duk_context* ctx);
     static duk_ret_t _js_wsDisconnect(duk_context* ctx);
