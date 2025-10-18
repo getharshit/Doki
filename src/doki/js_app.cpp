@@ -46,6 +46,9 @@ void JSApp::onCreate() {
     // Set the display ID for this context
     JSEngine::setDisplayId(_jsContext, getDisplayId());
 
+    // Set the display screen pointer for this context (CRITICAL for multi-display)
+    JSEngine::setDisplayScreen(_jsContext, getScreen());
+
     // Load and execute the script
     if (!JSEngine::loadScript(_jsContext, _scriptPath.c_str())) {
         String error = "Script error:\n" + String(JSEngine::getLastError());

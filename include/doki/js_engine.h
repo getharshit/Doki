@@ -176,6 +176,13 @@ public:
     static void setDisplayId(void* ctx, uint8_t displayId);
 
     /**
+     * @brief Set display screen pointer for this context
+     * @param ctx JS context
+     * @param screen LVGL screen pointer (lv_obj_t*)
+     */
+    static void setDisplayScreen(void* ctx, void* screen);
+
+    /**
      * @brief Get last error message
      * @return Error string
      */

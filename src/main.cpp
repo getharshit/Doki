@@ -566,6 +566,20 @@ void setup() {
         },
         "Demo of sequential animation playback with smooth transitions");
 
+    // Stress Test - Animation system stress testing
+    Doki::AppManager::registerApp("stress_test", "Stress Test",
+        []() -> Doki::DokiApp* {
+            return new Doki::JSApp("stress_test", "Stress Test", "/apps/stress_test.js");
+        },
+        "Comprehensive stress testing for animation system (memory, performance, concurrency)");
+
+    // Cloud Weather - Animated cloud weather display
+    Doki::AppManager::registerApp("cloud_weather", "Cloud Weather",
+        []() -> Doki::DokiApp* {
+            return new Doki::JSApp("cloud_weather", "Cloud Weather", "/apps/cloud_weather.js");
+        },
+        "Animated cloud weather visualization (30 frames, 200x150)");
+
     Doki::AppManager::printStatus();
 
     // Step 4: Initialize WiFi Manager
@@ -855,5 +869,6 @@ void loop() {
     lv_timer_handler();
     Doki::LVGLManager::unlock();
 
-    delay(5);
+    // OPTIMIZATION: Removed delay(5) to maximize FPS
+    // Run loop as fast as possible for best animation performance
 }

@@ -19,6 +19,7 @@ SpriteSheet::SpriteSheet()
       _loadTimeMs(0),
       _memoryUsed(0),
       _palette(nullptr),
+      _paletteRGB565(nullptr),
       _frameData(nullptr),
       _frameMetadata(nullptr),
       _frameDataSize(0),
@@ -283,7 +284,37 @@ bool SpriteSheet::loadPalette(const uint8_t* data) {
     memcpy(_palette, data, PALETTE_SIZE);
     _memoryUsed += PALETTE_SIZE;
 
-    Serial.println("[SpriteSheet] ✓ Palette loaded");
+    // Pre-convert palette to RGB565 for fast rendering (CRITICAL OPTIMIZATION)
+    Serial.println("[SpriteSheet] Converting palette to RGB565...");
+    size_t rgb565Size = 256 * sizeof(uint16_t);  // 256 colors × 2 bytes = 512 bytes
+    _paletteRGB565 = (uint16_t*)allocatePSRAM(rgb565Size);
+    if (!_paletteRGB565) {
+        Serial.println("[SpriteSheet] Error: Failed to allocate RGB565 palette memory");
+        _lastError = AnimationError::OUT_OF_MEMORY;
+        return false;
+    }
+
+    // Convert each palette entry from RGBA to RGB565 with pre-applied alpha blending
+    for (int i = 0; i < 256; i++) {
+        const RGBAColor& color = _palette[i];
+
+        // Pre-apply alpha blending with black background (0x000000)
+        // This eliminates per-pixel alpha blending during rendering
+        uint8_t r = (color.r * color.a) / 255;
+        uint8_t g = (color.g * color.a) / 255;
+        uint8_t b = (color.b * color.a) / 255;
+
+        // Convert to RGB565 format
+        uint16_t r5 = (r >> 3) & 0x1F;  // 5 bits red
+        uint16_t g6 = (g >> 2) & 0x3F;  // 6 bits green
+        uint16_t b5 = (b >> 3) & 0x1F;  // 5 bits blue
+
+        _paletteRGB565[i] = (r5 << 11) | (g6 << 5) | b5;
+    }
+
+    _memoryUsed += rgb565Size;
+
+    Serial.println("[SpriteSheet] ✓ Palette loaded and converted to RGB565");
     return true;
 }
 
@@ -343,6 +374,11 @@ void SpriteSheet::freeMemory() {
     if (_palette) {
         heap_caps_free(_palette);
         _palette = nullptr;
+    }
+
+    if (_paletteRGB565) {
+        heap_caps_free(_paletteRGB565);
+        _paletteRGB565 = nullptr;
     }
 
     if (_frameData) {

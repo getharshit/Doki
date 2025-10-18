@@ -414,6 +414,22 @@ void JSEngine::setDisplayId(void* ctx, uint8_t displayId) {
 #endif
 }
 
+void JSEngine::setDisplayScreen(void* ctx, void* screen) {
+#ifdef ENABLE_JAVASCRIPT_SUPPORT
+    if (!ctx) return;
+
+    duk_context* duk_ctx = (duk_context*)ctx;
+
+    // Store display screen pointer in the global stash (hidden from JS code)
+    duk_push_global_stash(duk_ctx);
+    duk_push_pointer(duk_ctx, screen);
+    duk_put_prop_string(duk_ctx, -2, "__displayScreen");
+    duk_pop(duk_ctx);
+
+    Serial.printf("[JSEngine] Set display screen pointer %p for context\n", screen);
+#endif
+}
+
 const char* JSEngine::getLastError() {
     return _lastError.c_str();
 }
@@ -1463,8 +1479,17 @@ duk_ret_t JSEngine::_js_loadAnimation(duk_context* ctx) {
 
     Serial.printf("[JS] Loading animation: %s\n", filepath);
 
-    // Get current screen for display
-    lv_obj_t* screen = lv_scr_act();
+    // Get display screen from stash (set by JSApp during onCreate)
+    duk_push_global_stash(ctx);
+    duk_get_prop_string(ctx, -1, "__displayScreen");
+    lv_obj_t* screen = (lv_obj_t*)duk_get_pointer(ctx, -1);
+    duk_pop_2(ctx);  // Pop pointer and stash
+
+    if (!screen) {
+        Serial.println("[JS] ERROR: No display screen set in context");
+        duk_push_int(ctx, -1);
+        return 1;
+    }
 
     // Create animation options
     Doki::Animation::AnimationOptions options;

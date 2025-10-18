@@ -159,6 +159,12 @@ public:
     const RGBAColor* getPalette() const { return _palette; }
 
     /**
+     * Get pre-converted RGB565 palette (for fast rendering)
+     * @return Pointer to RGB565 palette (256 colors), or nullptr
+     */
+    const uint16_t* getPaletteRGB565() const { return _paletteRGB565; }
+
+    /**
      * Get frame metadata
      * @param frameIndex Frame index
      * @return Frame metadata, or nullptr if invalid
@@ -232,6 +238,7 @@ private:
 
     SpriteHeader _header;               // Sprite header
     RGBAColor* _palette;                // Palette data (PSRAM)
+    uint16_t* _paletteRGB565;           // Pre-converted RGB565 palette (PSRAM) - for fast rendering
     uint8_t* _frameData;                // All frame data (PSRAM)
     FrameMetadata* _frameMetadata;      // Frame metadata (PSRAM)
 

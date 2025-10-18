@@ -74,20 +74,32 @@ class SpriteConverter:
 
         print(f"Loaded {len(self.frames)} frames")
 
-    def load_from_gif(self, gif_path):
-        """Load frames from animated GIF"""
+    def load_from_gif(self, gif_path, target_width=None, target_height=None):
+        """Load frames from animated GIF with optional resizing"""
         print(f"Loading frames from GIF: {gif_path}")
 
         gif = Image.open(gif_path)
 
-        # Get GIF properties
-        self.width, self.height = gif.size
+        # Get original GIF properties
+        orig_width, orig_height = gif.size
+
+        # Determine final dimensions
+        if target_width and target_height:
+            self.width = target_width
+            self.height = target_height
+            print(f"Resizing from {orig_width}×{orig_height} to {self.width}×{self.height}")
+        else:
+            self.width = orig_width
+            self.height = orig_height
 
         # Try to get FPS from GIF
         try:
             duration = gif.info.get('duration', 100)  # ms per frame
-            self.fps = int(1000 / duration)
-            print(f"GIF FPS: {self.fps}")
+            gif_fps = int(1000 / duration)
+            # Only use GIF FPS if we haven't set a custom one
+            if self.fps == 30:  # Default value
+                self.fps = gif_fps
+            print(f"GIF FPS: {gif_fps}, Using FPS: {self.fps}")
         except:
             pass
 
@@ -101,6 +113,10 @@ class SpriteConverter:
                 # Convert to RGB
                 if frame.mode != 'RGB':
                     frame = frame.convert('RGB')
+
+                # Resize if target dimensions specified
+                if target_width and target_height:
+                    frame = frame.resize((target_width, target_height), Image.Resampling.LANCZOS)
 
                 self.frames.append(frame)
                 frame_idx += 1
@@ -158,10 +174,10 @@ class SpriteConverter:
             # Write palette (256 × 4 bytes = 1024 bytes)
             self._write_palette(f)
 
-            # Write frame offsets
-            frame_offsets = self._calculate_frame_offsets()
-            for offset in frame_offsets:
-                f.write(struct.pack('<I', offset))
+            # NOTE: NOT writing frame offset table for uncompressed data
+            # C++ loader expects frame data immediately after palette
+            # Frame offsets are only needed for compressed/variable-size frames
+            # (Removing lines 162-164 to fix duplicate animation bug)
 
             # Write frame data
             self._write_frames(f)
@@ -511,7 +527,10 @@ def main():
         converter.height = args.height
     elif args.input.lower().endswith('.gif'):
         # Load from GIF
-        converter.load_from_gif(args.input)
+        # Pass target dimensions if specified (not default test values)
+        target_w = args.width if args.width != 64 else None
+        target_h = args.height if args.height != 64 else None
+        converter.load_from_gif(args.input, target_w, target_h)
     else:
         # Load from folder
         converter.load_from_folder(args.input)
