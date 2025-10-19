@@ -160,13 +160,33 @@ String MediaService::getMediaPath(uint8_t displayId, MediaType type) {
             return filename + "_image.jpg";
         case MediaType::GIF:
             return filename + "_anim.gif";
+        case MediaType::SPRITE:
+            return filename + "_anim.spr";
         default:
             return filename + "_unknown";
     }
 }
 
 MediaType MediaService::detectMediaType(const uint8_t* data, size_t size) {
-    if (data == nullptr || size < 12) {
+    if (data == nullptr || size < 4) {
+        return MediaType::UNKNOWN;
+    }
+
+    // Check sprite signature (0x444F4B49 = "DOKI" in little-endian)
+    if (size >= 4) {
+        uint32_t magic = *((const uint32_t*)data);
+
+        // DEBUG: Print magic bytes
+        Serial.printf("[MediaService] DEBUG: First 4 bytes = 0x%08X (expected 0x444F4B49 for SPRITE)\n", magic);
+
+        if (magic == 0x444F4B49) {
+            Serial.println("[MediaService] ✓ Detected SPRITE format");
+            return MediaType::SPRITE;
+        }
+    }
+
+    // Need at least 12 bytes for other formats
+    if (size < 12) {
         return MediaType::UNKNOWN;
     }
 
@@ -239,6 +259,8 @@ String MediaService::getExtension(MediaType type) {
             return ".jpg";
         case MediaType::GIF:
             return ".gif";
+        case MediaType::SPRITE:
+            return ".spr";
         default:
             return ".bin";
     }

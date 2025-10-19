@@ -21,7 +21,8 @@ enum class MediaType {
     UNKNOWN,
     IMAGE_PNG,
     IMAGE_JPEG,
-    GIF
+    GIF,
+    SPRITE        // Doki OS sprite format (.spr)
 };
 
 /**

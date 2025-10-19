@@ -1055,6 +1055,12 @@ void SimpleHttpServer::handleMediaUpload(AsyncWebServerRequest* request,
                 return;
             }
             expectedType = MediaType::GIF;
+        } else if (_uploadMediaType == "sprite") {
+            if (detectedType != MediaType::SPRITE) {
+                Serial.println("[SimpleHTTP] Error: Not a valid sprite file");
+                return;
+            }
+            expectedType = MediaType::SPRITE;
         }
 
         // Save media
