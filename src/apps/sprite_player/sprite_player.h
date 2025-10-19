@@ -11,6 +11,7 @@
 
 #include "doki/app_base.h"
 #include "doki/media_service.h"
+#include "doki/media_cache.h"
 #include "doki/animation/animation_manager.h"
 
 class SpritePlayerApp : public Doki::DokiApp {
@@ -35,17 +36,21 @@ public:
         // Set black background
         lv_obj_set_style_bg_color(screen, lv_color_hex(0x000000), 0);
 
-        // Check if sprite exists for this display
-        Doki::MediaInfo info = Doki::MediaService::getMediaInfo(displayId, Doki::MediaType::SPRITE);
+        // Check if sprite exists in cache or filesystem
+        String cacheId = "d" + String(displayId) + "_sprite";
+        size_t spriteSize = 0;
+        Doki::MediaType spriteType;
 
-        if (!info.exists) {
+        uint8_t* spriteData = Doki::MediaCache::getMedia(cacheId, &spriteSize, &spriteType);
+
+        if (spriteData == nullptr || spriteSize == 0) {
             showPlaceholder("No sprite uploaded\n\nUpload via PWA");
             log("No sprite found for this display");
             return;
         }
 
-        String logMsg = "Loading sprite from: " + info.path;
-        log(logMsg.c_str());
+        Serial.printf("[SpritePlayer] Loading sprite from cache: %s (%zu KB)\n",
+                     cacheId.c_str(), spriteSize / 1024);
 
         // Get AnimationManager instance
         auto& mgr = Doki::Animation::AnimationManager::getInstance();
@@ -60,12 +65,12 @@ public:
         options.autoPlay = false;  // We'll control playback
         options.loopMode = Doki::Animation::LoopMode::LOOP;  // Loop forever
 
-        // Load animation
-        _animId = mgr.loadAnimation(info.path.c_str(), screen, options);
+        // Load animation from memory
+        _animId = mgr.loadAnimationFromMemory(spriteData, spriteSize, screen, options);
 
         if (_animId < 0) {
             showPlaceholder("Error loading sprite");
-            log("Failed to load sprite");
+            log("Failed to load sprite from memory");
             return;
         }
 
@@ -75,8 +80,8 @@ public:
         // Start playing with loop mode
         mgr.playAnimation(_animId, Doki::Animation::LoopMode::LOOP);
 
-        log("✓ Sprite loaded and playing!");
-        Serial.printf("[SpritePlayer] Sprite size: %zu bytes\n", info.fileSize);
+        log("✓ Sprite loaded and playing from PSRAM!");
+        Serial.printf("[SpritePlayer] Sprite size: %zu KB\n", spriteSize / 1024);
     }
 
     void onStart() override {

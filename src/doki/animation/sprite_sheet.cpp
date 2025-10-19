@@ -179,8 +179,30 @@ bool SpriteSheet::parseSprite(const uint8_t* data, size_t size) {
         return false;
     }
 
+    // DEBUG: Log raw header bytes
+    Serial.println("[SpriteSheet] ========== Raw Header Dump (64 bytes) ==========");
+    for (size_t i = 0; i < SPRITE_HEADER_SIZE && i < size; i += 16) {
+        Serial.printf("0x%04X: ", i);
+        for (size_t j = 0; j < 16 && (i + j) < SPRITE_HEADER_SIZE && (i + j) < size; j++) {
+            Serial.printf("%02X ", data[i + j]);
+        }
+        Serial.println();
+    }
+    Serial.println("[SpriteSheet] ================================================");
+
     // Parse header
     memcpy(&_header, data, sizeof(SpriteHeader));
+
+    // DEBUG: Log parsed header fields
+    Serial.println("[SpriteSheet] ========== Parsed Header Fields ==========");
+    Serial.printf("Magic:       0x%08X (expected 0x%08X)\n", _header.magic, SPRITE_MAGIC);
+    Serial.printf("Version:     %u (expected %u)\n", _header.version, SPRITE_VERSION);
+    Serial.printf("Frame Count: %u\n", _header.frameCount);
+    Serial.printf("Dimensions:  %u x %u pixels\n", _header.frameWidth, _header.frameHeight);
+    Serial.printf("FPS:         %u\n", _header.fps);
+    Serial.printf("Color:       %u (0=8bit, 1=RGB565, 2=RGB888)\n", (uint8_t)_header.colorFormat);
+    Serial.printf("Compression: %u (0=none, 1=RLE, 2=LZ4)\n", (uint8_t)_header.compression);
+    Serial.println("[SpriteSheet] ===========================================");
 
     // Validate header
     if (!validateHeader(_header)) {
@@ -232,6 +254,8 @@ bool SpriteSheet::validateHeader(const SpriteHeader& header) {
     if (header.magic != SPRITE_MAGIC) {
         Serial.printf("[SpriteSheet] Error: Invalid magic number (got 0x%08X, expected 0x%08X)\n",
                      header.magic, SPRITE_MAGIC);
+        Serial.println("[SpriteSheet] ⚠️  This is not a valid Doki sprite file!");
+        Serial.println("[SpriteSheet] Ensure client converter writes magic 'DOKI' (0x444F4B49) at offset 0x00");
         _lastError = AnimationError::INVALID_FORMAT;
         return false;
     }
@@ -240,6 +264,27 @@ bool SpriteSheet::validateHeader(const SpriteHeader& header) {
     if (header.version != SPRITE_VERSION) {
         Serial.printf("[SpriteSheet] Error: Unsupported version (got %d, expected %d)\n",
                      header.version, SPRITE_VERSION);
+
+        // Detect common format error: missing version/frameCount fields
+        if (header.version == header.frameWidth) {
+            Serial.println("[SpriteSheet] ⚠️  DETECTED FORMAT ERROR:");
+            Serial.println("[SpriteSheet] Version field contains frameWidth value!");
+            Serial.println("[SpriteSheet] This means the client sprite converter is MISSING:");
+            Serial.println("[SpriteSheet]   - version (uint16_t, 2 bytes at offset 0x04)");
+            Serial.println("[SpriteSheet]   - frameCount (uint16_t, 2 bytes at offset 0x06)");
+            Serial.println("[SpriteSheet]");
+            Serial.println("[SpriteSheet] Expected header structure:");
+            Serial.println("[SpriteSheet]   0x00: magic (4 bytes) = 0x444F4B49");
+            Serial.println("[SpriteSheet]   0x04: version (2 bytes) = 1");
+            Serial.println("[SpriteSheet]   0x06: frameCount (2 bytes)");
+            Serial.println("[SpriteSheet]   0x08: frameWidth (2 bytes)");
+            Serial.println("[SpriteSheet]   0x0A: frameHeight (2 bytes)");
+            Serial.println("[SpriteSheet]   See docs/SPRITE_FILE_FORMAT.md for full specification");
+        } else {
+            Serial.printf("[SpriteSheet] Sprite format version %d is not supported.\n", header.version);
+            Serial.printf("[SpriteSheet] This firmware only supports version %d.\n", SPRITE_VERSION);
+        }
+
         _lastError = AnimationError::UNSUPPORTED_VERSION;
         return false;
     }

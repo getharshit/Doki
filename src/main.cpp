@@ -28,6 +28,7 @@
 #include "doki/simple_http_server.h"
 #include "doki/filesystem_manager.h"
 #include "doki/media_service.h"
+#include "doki/media_cache.h"
 #include "doki/lvgl_fs_driver.h"
 #include "doki/state_persistence.h"
 #include "doki/lvgl_manager.h"
@@ -49,7 +50,9 @@
 #include "apps/blank_app/blank_app.h"
 #include "apps/image_preview/image_preview.h"
 #include "apps/gif_player/gif_player.h"
+#include "apps/sprite_player/sprite_player.h"
 #include "apps/custom_js/custom_js_app.h"
+#include "apps/benchmark/benchmark.h"
 
 // ========================================
 // Hardware Configuration (now in hardware_config.h)
@@ -468,6 +471,13 @@ void setup() {
         while (1) delay(1000);
     }
 
+    // Initialize MediaCache (PSRAM-based caching)
+    Serial.println("\n[Main] Step 1.6/6: Initializing MediaCache...");
+    if (!Doki::MediaCache::init()) {
+        Serial.println("[Main] ✗ MediaCache initialization failed!");
+        while (1) delay(1000);
+    }
+
     // Step 2: Initialize LVGL
     Serial.println("\n[Main] Step 2/5: Initializing LVGL...");
     lv_init();
@@ -541,6 +551,8 @@ void setup() {
     Doki::AppManager::registerApp("blank", "Blank", []() -> Doki::DokiApp* { return new BlankApp(); }, "Blank screen");
     Doki::AppManager::registerApp("image", "Image Viewer", []() -> Doki::DokiApp* { return new ImagePreviewApp(); }, "Display images");
     Doki::AppManager::registerApp("gif", "GIF Player", []() -> Doki::DokiApp* { return new GifPlayerApp(); }, "Play animated GIFs");
+    Doki::AppManager::registerApp("sprite_player", "Sprite Player", []() -> Doki::DokiApp* { return new SpritePlayerApp(); }, "Play uploaded sprite animations");
+    Doki::AppManager::registerApp("benchmark", "Benchmark", []() -> Doki::DokiApp* { return new Doki::BenchmarkApp(); }, "Display performance testing");
 
     // Custom JavaScript app (loads code based on which display it's running on)
     Doki::AppManager::registerApp("custom", "Custom JS", []() -> Doki::DokiApp* { return new CustomJSApp(); }, "User-programmable JavaScript app");

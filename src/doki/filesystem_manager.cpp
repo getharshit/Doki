@@ -1,6 +1,6 @@
 /**
  * @file filesystem_manager.cpp
- * @brief Implementation of SPIFFS filesystem manager
+ * @brief Implementation of filesystem manager (SPIFFS/LittleFS)
  */
 
 #include "doki/filesystem_manager.h"
@@ -11,26 +11,33 @@ namespace Doki {
 bool FilesystemManager::_mounted = false;
 
 bool FilesystemManager::init(bool formatOnFail) {
-    Serial.println("\n[FilesystemManager] Initializing SPIFFS...");
+    Serial.printf("\n[FilesystemManager] Initializing %s...\n", DOKI_FS_NAME);
 
     if (_mounted) {
         Serial.println("[FilesystemManager] Already mounted");
         return true;
     }
 
-    // Try to mount SPIFFS
-    if (!SPIFFS.begin(false)) {
+#ifdef USE_LITTLEFS
+    // LittleFS: Always pass true to format on fail
+    if (!DOKI_FS.begin(true)) {  // Auto-format if mount fails
+        Serial.println("[FilesystemManager] ✗ LittleFS mount/format failed");
+        return false;
+    }
+#else
+    // SPIFFS: Use the formatOnFail parameter
+    if (!DOKI_FS.begin(false)) {
         Serial.println("[FilesystemManager] Mount failed");
 
         if (formatOnFail) {
             Serial.println("[FilesystemManager] Formatting filesystem...");
-            if (!SPIFFS.format()) {
+            if (!DOKI_FS.format()) {
                 Serial.println("[FilesystemManager] ✗ Format failed");
                 return false;
             }
 
             // Try mounting again after format
-            if (!SPIFFS.begin(true)) {
+            if (!DOKI_FS.begin(true)) {
                 Serial.println("[FilesystemManager] ✗ Mount failed after format");
                 return false;
             }
@@ -38,13 +45,14 @@ bool FilesystemManager::init(bool formatOnFail) {
             return false;
         }
     }
+#endif
 
     _mounted = true;
 
     // Print filesystem info
     size_t total, used;
     if (getInfo(total, used)) {
-        Serial.printf("[FilesystemManager] ✓ Mounted successfully\n");
+        Serial.printf("[FilesystemManager] ✓ %s mounted successfully\n", DOKI_FS_NAME);
         Serial.printf("[FilesystemManager]   Total: %zu KB\n", total / 1024);
         Serial.printf("[FilesystemManager]   Used:  %zu KB\n", used / 1024);
         Serial.printf("[FilesystemManager]   Free:  %zu KB\n", (total - used) / 1024);
@@ -56,8 +64,8 @@ bool FilesystemManager::init(bool formatOnFail) {
 bool FilesystemManager::getInfo(size_t& totalBytes, size_t& usedBytes) {
     if (!_mounted) return false;
 
-    totalBytes = SPIFFS.totalBytes();
-    usedBytes = SPIFFS.usedBytes();
+    totalBytes = DOKI_FS.totalBytes();
+    usedBytes = DOKI_FS.usedBytes();
     return true;
 }
 
@@ -68,12 +76,12 @@ bool FilesystemManager::createDir(const String& path) {
     }
 
     // Check if directory already exists
-    if (SPIFFS.exists(path)) {
+    if (DOKI_FS.exists(path)) {
         return true;
     }
 
     // Create directory
-    if (!SPIFFS.mkdir(path)) {
+    if (!DOKI_FS.mkdir(path)) {
         Serial.printf("[FilesystemManager] Error: Failed to create directory: %s\n", path.c_str());
         return false;
     }
@@ -84,7 +92,7 @@ bool FilesystemManager::createDir(const String& path) {
 
 bool FilesystemManager::exists(const String& path) {
     if (!_mounted) return false;
-    return SPIFFS.exists(path);
+    return DOKI_FS.exists(path);
 }
 
 bool FilesystemManager::readFile(const String& path, uint8_t** data, size_t& size) {
@@ -100,7 +108,7 @@ bool FilesystemManager::readFile(const String& path, uint8_t** data, size_t& siz
     }
 
     // Open file for reading
-    File file = SPIFFS.open(path, "r");
+    File file = DOKI_FS.open(path, "r");
     if (!file) {
         Serial.printf("[FilesystemManager] Error: Failed to open file: %s\n", path.c_str());
         return false;
@@ -160,13 +168,14 @@ bool FilesystemManager::writeFile(const String& path, const uint8_t* data, size_
     }
 
     // Open file for writing
-    File file = SPIFFS.open(path, "w");
+    File file = DOKI_FS.open(path, "w");
     if (!file) {
         Serial.printf("[FilesystemManager] Error: Failed to open file for writing: %s\n", path.c_str());
         return false;
     }
 
-    // Write data
+#ifdef USE_LITTLEFS
+    // LittleFS can handle large writes directly
     size_t bytesWritten = file.write(data, size);
     file.close();
 
@@ -175,8 +184,40 @@ bool FilesystemManager::writeFile(const String& path, const uint8_t* data, size_
         return false;
     }
 
-    Serial.printf("[FilesystemManager] ✓ Wrote file: %s (%zu bytes)\n", path.c_str(), size);
+    Serial.printf("[FilesystemManager] ✓ Wrote file: %s (%zu KB)\n", path.c_str(), size / 1024);
     return true;
+#else
+    // SPIFFS needs chunked writes with periodic flushing
+    const size_t CHUNK_SIZE = 4096;
+    size_t offset = 0;
+    size_t totalWritten = 0;
+
+    while (offset < size) {
+        size_t chunkSize = min(CHUNK_SIZE, size - offset);
+        size_t written = file.write(data + offset, chunkSize);
+
+        if (written != chunkSize) {
+            Serial.printf("[FilesystemManager] Error: Write failed at offset %zu (wrote %zu, expected %zu)\n",
+                         offset, written, chunkSize);
+            file.close();
+            return false;
+        }
+
+        offset += written;
+        totalWritten += written;
+
+        // Flush every 40KB (10 chunks) to prevent cache overflow
+        if ((totalWritten % (40 * 1024)) == 0) {
+            file.flush();
+        }
+    }
+
+    file.flush();
+    file.close();
+
+    Serial.printf("[FilesystemManager] ✓ Wrote file: %s (%zu KB)\n", path.c_str(), size / 1024);
+    return true;
+#endif
 }
 
 bool FilesystemManager::deleteFile(const String& path) {
@@ -190,7 +231,7 @@ bool FilesystemManager::deleteFile(const String& path) {
         return true; // Not an error if already deleted
     }
 
-    if (!SPIFFS.remove(path)) {
+    if (!DOKI_FS.remove(path)) {
         Serial.printf("[FilesystemManager] Error: Failed to delete file: %s\n", path.c_str());
         return false;
     }
@@ -202,7 +243,7 @@ bool FilesystemManager::deleteFile(const String& path) {
 size_t FilesystemManager::getFileSize(const String& path) {
     if (!_mounted || !exists(path)) return 0;
 
-    File file = SPIFFS.open(path, "r");
+    File file = DOKI_FS.open(path, "r");
     if (!file) return 0;
 
     size_t size = file.size();
@@ -218,7 +259,7 @@ bool FilesystemManager::listFiles(const String& path, std::vector<String>& files
 
     files.clear();
 
-    File root = SPIFFS.open(path);
+    File root = DOKI_FS.open(path);
     if (!root) {
         Serial.printf("[FilesystemManager] Error: Failed to open directory: %s\n", path.c_str());
         return false;
@@ -247,7 +288,7 @@ bool FilesystemManager::format() {
     Serial.println("[FilesystemManager] WARNING: Formatting filesystem (all data will be lost)");
 
     _mounted = false;
-    if (!SPIFFS.format()) {
+    if (!DOKI_FS.format()) {
         Serial.println("[FilesystemManager] ✗ Format failed");
         return false;
     }

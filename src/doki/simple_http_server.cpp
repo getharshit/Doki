@@ -5,6 +5,7 @@
 
 #include "doki/simple_http_server.h"
 #include "doki/media_service.h"
+#include "doki/media_cache.h"
 #include "doki/app_manager.h"
 #include "doki/filesystem_manager.h"
 #include <WiFi.h>
@@ -74,8 +75,19 @@ bool SimpleHttpServer::begin(uint16_t port) {
     // Dashboard HTML
     _server->on("/", HTTP_GET, handleDashboard);
 
-    // Enable CORS
+    // Enable CORS for all requests
     DefaultHeaders::Instance().addHeader("Access-Control-Allow-Origin", "*");
+    DefaultHeaders::Instance().addHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+    DefaultHeaders::Instance().addHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+
+    // Handle OPTIONS preflight requests for all endpoints
+    _server->onNotFound([](AsyncWebServerRequest *request) {
+        if (request->method() == HTTP_OPTIONS) {
+            request->send(200);
+        } else {
+            request->send(404, "text/plain", "Not Found");
+        }
+    });
 
     _server->begin();
     _running = true;
@@ -991,22 +1003,22 @@ void SimpleHttpServer::handleMediaUpload(AsyncWebServerRequest* request,
     if (index == 0) {
         Serial.printf("[SimpleHTTP] Starting upload: %s\n", filename.c_str());
 
-        // Get display ID and type from request parameters
-        if (request->hasParam("display", true)) {
-            String displayParam = request->getParam("display", true)->value();
+        // Get display ID and type from URL query parameters (not POST body)
+        if (request->hasParam("display", false)) {  // false = query param
+            String displayParam = request->getParam("display", false)->value();
             _uploadDisplayId = displayParam.toInt();
             Serial.printf("[SimpleHTTP] Display parameter: '%s' -> ID: %d\n",
                          displayParam.c_str(), _uploadDisplayId);
         } else {
-            Serial.println("[SimpleHTTP] Error: Missing display parameter");
+            Serial.println("[SimpleHTTP] Error: Missing display parameter in URL");
             return;
         }
 
-        if (request->hasParam("type", true)) {
-            _uploadMediaType = request->getParam("type", true)->value();
+        if (request->hasParam("type", false)) {  // false = query param
+            _uploadMediaType = request->getParam("type", false)->value();
             Serial.printf("[SimpleHTTP] Type parameter: '%s'\n", _uploadMediaType.c_str());
         } else {
-            Serial.println("[SimpleHTTP] Error: Missing type parameter");
+            Serial.println("[SimpleHTTP] Error: Missing type parameter in URL");
             return;
         }
 
@@ -1020,11 +1032,51 @@ void SimpleHttpServer::handleMediaUpload(AsyncWebServerRequest* request,
         _uploadBuffer.push_back(data[i]);
     }
 
+    // Debug: Log first 16 bytes of first chunk to detect corruption
+    if (index == 0 && len >= 16) {
+        Serial.printf("[SimpleHTTP] First 16 bytes received: ");
+        for (size_t i = 0; i < 16; i++) {
+            Serial.printf("%02X ", data[i]);
+        }
+        Serial.println();
+
+        // Check magic number for sprite files
+        if (_uploadMediaType == "sprite" && len >= 4) {
+            uint32_t magic = *((uint32_t*)data);
+            Serial.printf("[SimpleHTTP] Magic number: 0x%08X (expected 0x444F4B49 for sprite)\n", magic);
+        }
+    }
+
     Serial.printf("[SimpleHTTP] Upload progress: %zu bytes\n", _uploadBuffer.size());
 
     // Final chunk - process upload
     if (final) {
         Serial.printf("[SimpleHTTP] Upload complete: %zu bytes total\n", _uploadBuffer.size());
+
+        // Debug: Log first 16 bytes of final buffer to verify integrity
+        if (_uploadBuffer.size() >= 16) {
+            Serial.printf("[SimpleHTTP] First 16 bytes in buffer: ");
+            for (size_t i = 0; i < 16; i++) {
+                Serial.printf("%02X ", _uploadBuffer[i]);
+            }
+            Serial.println();
+
+            // Check magic number
+            if (_uploadBuffer.size() >= 4) {
+                uint32_t magic = *((uint32_t*)_uploadBuffer.data());
+                Serial.printf("[SimpleHTTP] Buffer magic number: 0x%08X\n", magic);
+
+                if (_uploadMediaType == "sprite") {
+                    const uint32_t SPRITE_MAGIC = 0x444F4B49;  // "DOKI"
+                    if (magic != SPRITE_MAGIC) {
+                        Serial.printf("[SimpleHTTP] ⚠️ WARNING: Sprite magic mismatch! Got 0x%08X, expected 0x%08X\n",
+                                     magic, SPRITE_MAGIC);
+                    } else {
+                        Serial.println("[SimpleHTTP] ✓ Sprite magic number is correct");
+                    }
+                }
+            }
+        }
 
         // Validate size
         if (_uploadBuffer.size() == 0) {
@@ -1063,13 +1115,38 @@ void SimpleHttpServer::handleMediaUpload(AsyncWebServerRequest* request,
             expectedType = MediaType::SPRITE;
         }
 
-        // Save media
-        Serial.printf("[SimpleHTTP] Saving media to Display %d, type: %d\n",
+        // Load media into PSRAM cache (with optional persistence for small files)
+        Serial.printf("[SimpleHTTP] Loading media to cache (Display %d, type: %d)\n",
                      _uploadDisplayId, (int)expectedType);
-        if (MediaService::saveMedia(_uploadDisplayId, _uploadBuffer.data(), _uploadBuffer.size(), expectedType)) {
-            Serial.printf("[SimpleHTTP] ✓ Media saved successfully to Display %d\n", _uploadDisplayId);
+
+        // Generate cache ID
+        String cacheId = "d" + String(_uploadDisplayId) + "_" + _uploadMediaType;
+
+        if (MediaCache::loadFromMemory(cacheId,
+                                      _uploadBuffer.data(),
+                                      _uploadBuffer.size(),
+                                      expectedType,
+                                      _uploadDisplayId,
+                                      true)) {  // Try to persist small files
+            Serial.printf("[SimpleHTTP] ✓ Media loaded to cache (Display %d)\n", _uploadDisplayId);
+
+            // Reload app to show new media
+            String appToLoad;
+            if (expectedType == MediaType::SPRITE) {
+                appToLoad = "sprite_player";
+            } else if (expectedType == MediaType::GIF) {
+                appToLoad = "gif";
+            } else if (expectedType == MediaType::IMAGE_PNG || expectedType == MediaType::IMAGE_JPEG) {
+                appToLoad = "image";
+            }
+
+            if (!appToLoad.isEmpty()) {
+                AppManager::unloadApp(_uploadDisplayId);
+                AppManager::loadApp(_uploadDisplayId, appToLoad.c_str());
+                Serial.printf("[SimpleHTTP] ✓ Reloaded app: %s\n", appToLoad.c_str());
+            }
         } else {
-            Serial.printf("[SimpleHTTP] ✗ Failed to save media to Display %d\n", _uploadDisplayId);
+            Serial.printf("[SimpleHTTP] ✗ Failed to load media to cache (Display %d)\n", _uploadDisplayId);
         }
 
         // Clear upload buffer

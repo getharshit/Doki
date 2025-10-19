@@ -2,7 +2,7 @@
  * @file image_preview.h
  * @brief Static Image Preview App for Doki OS
  *
- * Displays static PNG/JPEG images loaded from SPIFFS.
+ * Displays static PNG/JPEG images loaded from MediaCache (PSRAM/LittleFS).
  * Each display has its own image slot.
  */
 
@@ -11,6 +11,7 @@
 
 #include "doki/app_base.h"
 #include "doki/media_service.h"
+#include "doki/media_cache.h"
 
 class ImagePreviewApp : public Doki::DokiApp {
 public:
@@ -20,7 +21,9 @@ public:
     ImagePreviewApp()
         : DokiApp("image", "Image Preview"),
           _image(nullptr),
-          _placeholderLabel(nullptr) {}
+          _placeholderLabel(nullptr),
+          _imageData(nullptr),
+          _imageSize(0) {}
 
     void onCreate() override {
         log("Creating Image Preview App...");
@@ -34,24 +37,32 @@ public:
         // Set black background
         lv_obj_set_style_bg_color(screen, lv_color_hex(0x000000), 0);
 
-        // Check for PNG image first
-        Doki::MediaInfo info = Doki::MediaService::getMediaInfo(displayId, Doki::MediaType::IMAGE_PNG);
+        // Try to load image from MediaCache
+        // Check for "image" type (could be PNG or JPEG)
+        String cacheId = "d" + String(displayId) + "_image";
+        Doki::MediaType imageType;
 
-        // If no PNG, check for JPEG
-        if (!info.exists) {
-            info = Doki::MediaService::getMediaInfo(displayId, Doki::MediaType::IMAGE_JPEG);
-        }
+        _imageData = Doki::MediaCache::getMedia(cacheId, &_imageSize, &imageType);
 
-        if (!info.exists) {
-            showPlaceholder("No image uploaded\n\nUpload via dashboard");
+        if (_imageData == nullptr || _imageSize == 0) {
+            showPlaceholder("No image uploaded\n\nUpload via PWA");
             log("No image found for this display");
             return;
         }
 
-        String logMsg = "Loading image from: " + info.path;
-        log(logMsg.c_str());
+        Serial.printf("[ImagePreview] Loading image from cache: %s (%zu KB, type=%d)\n",
+                     cacheId.c_str(), _imageSize / 1024, (int)imageType);
 
-        // Create image object
+        // Validate image type
+        if (imageType != Doki::MediaType::IMAGE_PNG &&
+            imageType != Doki::MediaType::IMAGE_JPEG) {
+            showPlaceholder("Invalid image format");
+            log("Error: Invalid image type");
+            _imageData = nullptr;
+            return;
+        }
+
+        // Create LVGL image object
         _image = lv_img_create(screen);
         if (_image == nullptr) {
             log("Error: Failed to create image object");
@@ -59,16 +70,28 @@ public:
             return;
         }
 
-        // Set image source from SPIFFS path
-        // LVGL requires "S:" prefix for SPIFFS driver
-        String lvglPath = "S:" + info.path;
-        lv_img_set_src(_image, lvglPath.c_str());
+        // Create LVGL image descriptor from memory buffer (use member variable so it persists)
+        _imgDsc.header.always_zero = 0;
+        _imgDsc.header.w = 0;  // Will be determined by LVGL decoder
+        _imgDsc.header.h = 0;
+        _imgDsc.data_size = _imageSize;
+        _imgDsc.data = _imageData;
+
+        // Set color format based on image type
+        if (imageType == Doki::MediaType::IMAGE_PNG) {
+            _imgDsc.header.cf = LV_IMG_CF_RAW_ALPHA;  // PNG with alpha
+        } else {
+            _imgDsc.header.cf = LV_IMG_CF_RAW;  // JPEG without alpha
+        }
+
+        // Set image source from memory
+        lv_img_set_src(_image, &_imgDsc);
 
         // Check if image loaded successfully
         const void* src = lv_img_get_src(_image);
         if (src == nullptr) {
-            log("Error: Failed to load image from SPIFFS");
-            showPlaceholder("Error loading image");
+            log("Error: Failed to decode image from memory");
+            showPlaceholder("Error decoding image");
             lv_obj_del(_image);
             _image = nullptr;
             return;
@@ -80,11 +103,8 @@ public:
         // Enable anti-aliasing for better quality
         lv_img_set_antialias(_image, true);
 
-        // Optional: Add subtle zoom/fade animation
-        // addZoomAnimation();
-
-        log("✓ Image loaded successfully!");
-        Serial.printf("[ImagePreview] Image size: %zu bytes\n", info.fileSize);
+        log("✓ Image loaded successfully from PSRAM!");
+        Serial.printf("[ImagePreview] Image size: %zu bytes\n", _imageSize);
     }
 
     void onStart() override {
@@ -93,7 +113,6 @@ public:
 
     void onUpdate() override {
         // Static image - no updates needed
-        // Could add periodic refresh check here if needed
     }
 
     void onPause() override {
@@ -102,14 +121,22 @@ public:
 
     void onDestroy() override {
         log("Image Preview destroyed");
+
         // LVGL auto-cleans image resources
         _image = nullptr;
         _placeholderLabel = nullptr;
+
+        // Don't free _imageData - it's managed by MediaCache
+        _imageData = nullptr;
+        _imageSize = 0;
     }
 
 private:
     lv_obj_t* _image;                ///< LVGL image object
     lv_obj_t* _placeholderLabel;     ///< Placeholder text when no image
+    uint8_t* _imageData;             ///< Image data pointer (from MediaCache, don't free!)
+    size_t _imageSize;               ///< Image data size
+    lv_img_dsc_t _imgDsc;            ///< LVGL image descriptor (must persist)
 
     /**
      * @brief Show placeholder text when no image is available
@@ -127,26 +154,6 @@ private:
         lv_obj_set_style_text_align(_placeholderLabel, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_align(_placeholderLabel, LV_ALIGN_CENTER, 0, 0);
         lv_obj_set_width(_placeholderLabel, 200);
-    }
-
-    /**
-     * @brief Add subtle zoom animation (optional)
-     */
-    void addZoomAnimation() {
-        if (_image == nullptr) return;
-
-        lv_anim_t anim;
-        lv_anim_init(&anim);
-        lv_anim_set_var(&anim, _image);
-        lv_anim_set_time(&anim, 3000);
-        lv_anim_set_values(&anim, 256, 280);  // Zoom from 100% to 109%
-        lv_anim_set_path_cb(&anim, lv_anim_path_ease_in_out);
-        lv_anim_set_repeat_count(&anim, LV_ANIM_REPEAT_INFINITE);
-        lv_anim_set_playback_time(&anim, 3000);
-        lv_anim_set_exec_cb(&anim, [](void* obj, int32_t v) {
-            lv_img_set_zoom((lv_obj_t*)obj, v);
-        });
-        lv_anim_start(&anim);
     }
 };
 

@@ -1,9 +1,9 @@
 /**
  * @file filesystem_manager.h
- * @brief SPIFFS filesystem management for Doki OS
+ * @brief Filesystem management for Doki OS
  *
- * Handles initialization, file operations, and storage management
- * for the SPIFFS filesystem.
+ * Handles initialization, file operations, and storage management.
+ * Supports both SPIFFS and LittleFS with compile-time switching.
  */
 
 #ifndef FILESYSTEM_MANAGER_H
@@ -12,7 +12,19 @@
 #include <Arduino.h>
 #include <vector>
 #include "FS.h"
-#include "SPIFFS.h"
+
+// Filesystem selection (compile-time)
+#ifdef USE_LITTLEFS
+    #include <FS.h>
+    #include <LittleFS.h>
+    #define DOKI_FS LittleFS
+    #define DOKI_FS_NAME "LittleFS"
+#else
+    #include <FS.h>
+    #include <SPIFFS.h>
+    #define DOKI_FS SPIFFS
+    #define DOKI_FS_NAME "SPIFFS"
+#endif
 
 namespace Doki {
 
