@@ -52,7 +52,13 @@
 #include "apps/gif_player/gif_player.h"
 #include "apps/sprite_player/sprite_player.h"
 #include "apps/custom_js/custom_js_app.h"
-#include "apps/benchmark/benchmark.h"
+
+// Smartwatch-style clock faces
+#include "apps/clock_neon_blocks/clock_neon_blocks.h"
+#include "apps/clock_cyber_matrix/clock_cyber_matrix.h"
+#include "apps/clock_rainbow_wave/clock_rainbow_wave.h"
+#include "apps/clock_fitness_pro/clock_fitness_pro.h"
+#include "apps/clock_zen_glow/clock_zen_glow.h"
 
 // ========================================
 // Hardware Configuration (now in hardware_config.h)
@@ -552,7 +558,13 @@ void setup() {
     Doki::AppManager::registerApp("image", "Image Viewer", []() -> Doki::DokiApp* { return new ImagePreviewApp(); }, "Display images");
     Doki::AppManager::registerApp("gif", "GIF Player", []() -> Doki::DokiApp* { return new GifPlayerApp(); }, "Play animated GIFs");
     Doki::AppManager::registerApp("sprite_player", "Sprite Player", []() -> Doki::DokiApp* { return new SpritePlayerApp(); }, "Play uploaded sprite animations");
-    Doki::AppManager::registerApp("benchmark", "Benchmark", []() -> Doki::DokiApp* { return new Doki::BenchmarkApp(); }, "Display performance testing");
+
+    // Smartwatch-style clock faces with custom fonts
+    Doki::AppManager::registerApp("clock_neon", "Clock: Neon Blocks", []() -> Doki::DokiApp* { return new ClockNeonBlocksApp(); }, "Geometric modular block design");
+    Doki::AppManager::registerApp("clock_cyber", "Clock: Cyber Matrix", []() -> Doki::DokiApp* { return new ClockCyberMatrixApp(); }, "Retro dot matrix LED style");
+    Doki::AppManager::registerApp("clock_rainbow", "Clock: Rainbow Wave", []() -> Doki::DokiApp* { return new ClockRainbowWaveApp(); }, "Apple Watch gradient style");
+    Doki::AppManager::registerApp("clock_fitness", "Clock: Fitness Pro", []() -> Doki::DokiApp* { return new ClockFitnessProApp(); }, "Activity bars and stats");
+    Doki::AppManager::registerApp("clock_zen", "Clock: Zen Glow", []() -> Doki::DokiApp* { return new ClockZenGlowApp(); }, "Minimal design with glow");
 
     // Custom JavaScript app (loads code based on which display it's running on)
     Doki::AppManager::registerApp("custom", "Custom JS", []() -> Doki::DokiApp* { return new CustomJSApp(); }, "User-programmable JavaScript app");
@@ -570,20 +582,6 @@ void setup() {
             return new Doki::JSApp("websocket_test", "WebSocket Test", "/apps/websocket_test.js");
         },
         "WebSocket diagnostic and testing tool");
-
-    // Animation Chain - Sequential animation playback demo
-    Doki::AppManager::registerApp("animation_chain", "Animation Chain",
-        []() -> Doki::DokiApp* {
-            return new Doki::JSApp("animation_chain", "Animation Chain", "/apps/animation_chain.js");
-        },
-        "Demo of sequential animation playback with smooth transitions");
-
-    // Stress Test - Animation system stress testing
-    Doki::AppManager::registerApp("stress_test", "Stress Test",
-        []() -> Doki::DokiApp* {
-            return new Doki::JSApp("stress_test", "Stress Test", "/apps/stress_test.js");
-        },
-        "Comprehensive stress testing for animation system (memory, performance, concurrency)");
 
     // Cloud Weather - Animated cloud weather display
     Doki::AppManager::registerApp("cloud_weather", "Cloud Weather",

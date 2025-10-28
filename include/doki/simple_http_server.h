@@ -15,8 +15,7 @@ namespace Doki {
 /**
  * @brief Simple HTTP Server for app switching
  *
- * Provides a web dashboard to control which apps are displayed
- * on each display.
+ * Provides REST API endpoints for display management.
  */
 class SimpleHttpServer {
 public:
@@ -60,7 +59,6 @@ private:
     static void handleGetApps(AsyncWebServerRequest* request);
     static void handleLoadApp(AsyncWebServerRequest* request);
     static void handleGetStatus(AsyncWebServerRequest* request);
-    static void handleDashboard(AsyncWebServerRequest* request);
     static void handleMediaInfo(AsyncWebServerRequest* request);
     static void handleMediaDelete(AsyncWebServerRequest* request);
     static void handleUploadJS(AsyncWebServerRequest* request);
@@ -76,9 +74,6 @@ private:
                                       uint8_t* data,
                                       size_t len,
                                       bool final);
-
-    // HTML generation
-    static String generateDashboardHTML();
 
     // Upload state management
     static uint8_t _uploadDisplayId;
